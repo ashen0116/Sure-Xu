@@ -11,6 +11,8 @@ import android.os.Looper
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
+import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
@@ -72,7 +74,8 @@ class NeoGroupFieldsActivity : AppCompatActivity() {
         // save() 会把默认值当成改动整份覆盖磁盘真实配置，且 UI 显示的开关状态与真实配置不一致
         ConfigPreload.prepare(currentConfigUserId())
 
-        findViewById<TextView>(R.id.neo_group_title).text = g.name
+        // 注意：Kotlin 的 g.name 会解析成 Enum.name（英文常量），必须走显式 getter 才能取到中文名
+        findViewById<TextView>(R.id.neo_group_title).text = ModelGroup.getName(g.code) ?: g.code
         findViewById<View>(R.id.neo_group_back).setOnClickListener { saveAndFinish() }
         findViewById<View>(R.id.neo_group_execute).setOnClickListener {
             try {
@@ -194,43 +197,76 @@ class NeoGroupFieldsActivity : AppCompatActivity() {
             if (visibleFields.isEmpty()) {
                 return@forEach
             }
-            val header = TextView(this).apply {
-                text = mc.name
-                setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_primary))
-                textSize = 14f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-                setPadding(0, topPx, 0, dp(8))
+            // 顶层改成"模型折叠卡"：默认全部折叠，头部直接显示 已开/总数，
+            // 展开后按字段名里已有的"模块|字段"前缀拆小节，避免几十个开关平铺
+            val body = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(14), 0, dp(14), dp(6))
+                visibility = if (query.isNotBlank() || expandedModels[mc.code] == true) {
+                    View.VISIBLE
+                } else {
+                    View.GONE
+                }
             }
-            container.addView(header)
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = ContextCompat.getDrawable(this@NeoGroupFieldsActivity, R.drawable.neu_card_raised)
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { setMargins(0, 0, 0, marginPx) }
+            }
+            card.addView(buildModelHeader(mc, visibleFields, body))
+            card.addView(body)
+            container.addView(card)
 
+            var lastSection: String? = null
+            var firstRow = true
             visibleFields.forEach { field ->
-                container.addView(buildFieldRow(mc, field, marginPx, rg))
+                val raw = field.name ?: ""
+                val section = if (raw.contains("|")) {
+                    raw.substringBefore("|").trim().takeIf { it.isNotEmpty() }
+                } else {
+                    null
+                }
+                if (section != null && section != lastSection) {
+                    body.addView(buildSectionTitle(section))
+                    firstRow = true
+                }
+                lastSection = section
+                if (!firstRow) body.addView(buildRowDivider())
+                firstRow = false
+                body.addView(buildFieldRow(mc, field, 0, rg))
                 if (rg == ModelGroup.BASE && field.code == "debugMode") {
-                    container.addView(
+                    body.addView(buildRowDivider())
+                    body.addView(
                         buildAppConfigRow(
                             "开启状态栏禁删",
-                            marginPx,
+                            0,
                             getter = { AppConfig.INSTANCE.enableOnGoing ?: false },
                             setter = { v -> AppConfig.INSTANCE.enableOnGoing = v }
                         )
                     )
-                    container.addView(
+                    body.addView(buildRowDivider())
+                    body.addView(
                         buildAppConfigRow(
                             "屏蔽部分弹窗",
-                            marginPx,
+                            0,
                             getter = { AppConfig.INSTANCE.closeCaptchaDialog ?: true },
                             setter = { v -> AppConfig.INSTANCE.closeCaptchaDialog = v }
                         )
                     )
-                    container.addView(
+                    body.addView(buildRowDivider())
+                    body.addView(
                         buildAppConfigRow(
                             "气泡提示",
-                            marginPx,
+                            0,
                             getter = { AppConfig.INSTANCE.showToast ?: true },
                             setter = { v -> AppConfig.INSTANCE.showToast = v }
                         )
                     )
-                    container.addView(buildToastOffsetRow(marginPx))
+                    body.addView(buildRowDivider())
+                    body.addView(buildToastOffsetRow(0))
                 }
             }
             }
@@ -239,20 +275,63 @@ class NeoGroupFieldsActivity : AppCompatActivity() {
 
     /** 构建字段条目卡片；返回条目 View，供点击后刷新自身状态。 */
     private fun buildFieldRow(mc: ModelConfig, field: ModelField<*>, marginPx: Int, ownerGroup: ModelGroup): View {
-        val row = layoutInflater.inflate(R.layout.neo_item_field, null)
-        val lp = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        )
-        lp.setMargins(0, 0, 0, marginPx)
-        row.layoutParams = lp
+        // 紧凑单行：名称占左、当前值与状态贴右，不再一行一张大圆角卡（密度提升的主要来源）
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(11), 0, dp(11))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, 0, 0, marginPx) }
+        }
+        val nameView = TextView(this).apply {
+            textSize = 14f
+            setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_primary))
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val summaryView = TextView(this).apply {
+            textSize = 12f
+            setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_hint))
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            gravity = Gravity.END
+            maxWidth = dp(150)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, 0, dp(8), 0) }
+        }
+        val statusView = TextView(this).apply {
+            textSize = 12f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            background = ContextCompat.getDrawable(this@NeoGroupFieldsActivity, R.drawable.neu_pill)
+            setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_hint))
+            visibility = View.GONE
+        }
+        val arrowView = TextView(this).apply {
+            text = "›"
+            textSize = 20f
+            setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_hint))
+            setPadding(dp(4), 0, 0, 0)
+            visibility = View.GONE
+        }
+        row.addView(nameView)
+        row.addView(summaryView)
+        row.addView(statusView)
+        row.addView(arrowView)
 
-        val nameView = row.findViewById<TextView>(R.id.neo_field_name)
-        val summaryView = row.findViewById<TextView>(R.id.neo_field_summary)
-        val statusView = row.findViewById<TextView>(R.id.neo_field_status)
-        val arrowView = row.findViewById<TextView>(R.id.neo_field_arrow)
-
-        nameView.text = field.name
+        // 名称里"模块|字段"的前缀已提升为小节标题，行内只留后半段
+        val rawName = field.name ?: ""
+        nameView.text = if (rawName.contains("|")) {
+            rawName.substringAfter("|").trim().ifBlank { rawName.substringBefore("|").trim() }
+        } else {
+            rawName
+        }
         summaryView.text = field.description
 
         when (field.type) {
@@ -337,18 +416,36 @@ class NeoGroupFieldsActivity : AppCompatActivity() {
                 arrowView.visibility = View.VISIBLE
                 statusView.visibility = View.GONE
                 val list = (field.value as? List<*>)?.mapNotNull { it?.toString() } ?: emptyList()
-                summaryView.text = list.joinToString(",")
-                row.setOnClickListener {
-                    showEditDialog(
-                        title = field.name ?: "",
-                        initial = list.joinToString("\n"),
-                        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE,
-                        multiLine = true,
-                    ) { input ->
-                        val newList = input.lines().map { it.trim() }.filter { it.isNotEmpty() }
-                        field.setObjectValue(newList)
-                        summaryView.text = newList.joinToString(",")
-                        modified = true
+                val timeKind = detectTimeKind(field)
+                if (timeKind != TimeFieldKind.NONE) {
+                    // 时间类字段不再让用户手填 "065530,2359"，改成滚轮
+                    summaryView.text = summarizeTimeList(list, timeKind)
+                    row.setOnClickListener {
+                        val apply: (List<String>) -> Unit = { newList ->
+                            field.setObjectValue(newList)
+                            summaryView.text = summarizeTimeList(newList, timeKind)
+                            modified = true
+                        }
+                        if (timeKind == TimeFieldKind.POINTS) {
+                            showTimePointDialog(field.name ?: "", list, apply)
+                        } else {
+                            showTimeRangeDialog(field.name ?: "", list, apply)
+                        }
+                    }
+                } else {
+                    summaryView.text = list.joinToString(",")
+                    row.setOnClickListener {
+                        showEditDialog(
+                            title = field.name ?: "",
+                            initial = list.joinToString("\n"),
+                            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE,
+                            multiLine = true,
+                        ) { input ->
+                            val newList = input.lines().map { it.trim() }.filter { it.isNotEmpty() }
+                            field.setObjectValue(newList)
+                            summaryView.text = newList.joinToString(",")
+                            modified = true
+                        }
                     }
                 }
             }
@@ -604,6 +701,441 @@ class NeoGroupFieldsActivity : AppCompatActivity() {
         dialog.findViewById<TextView>(R.id.neo_edit_cancel).setOnClickListener { dialog.dismiss() }
         dialog.findViewById<TextView>(R.id.neo_edit_ok).setOnClickListener {
             onOk(edit.text?.toString() ?: "")
+            dialog.dismiss()
+        }
+        dialog.show()
+    }
+
+    // ==================== 模型折叠卡 / 小节 / 分隔线 ====================
+
+    private enum class TimeFieldKind { NONE, POINTS, RANGE }
+
+    /** 只认这三个已知时间字段，避免误伤其它 LIST（好友名单、城市码等） */
+    private val timeFieldCodes = setOf("execAtTimeList", "wakenAtTimeList", "energyTime")
+
+    /** 折叠状态按模型编码记忆；未记录即折叠（需求：全部默认折叠） */
+    private val expandedModels = mutableMapOf<String, Boolean>()
+
+    private fun detectTimeKind(field: ModelField<*>): TimeFieldKind {
+        if (field.code !in timeFieldCodes) {
+            return TimeFieldKind.NONE
+        }
+        return if (field.code == "energyTime") TimeFieldKind.RANGE else TimeFieldKind.POINTS
+    }
+
+    private fun two(v: Int): String = if (v < 10) "0$v" else v.toString()
+
+    private fun parsePoint(raw: String): Pair<Int, Int> {
+        val s = raw.trim()
+        val h = s.take(2).toIntOrNull() ?: 0
+        val m = s.drop(2).take(2).toIntOrNull() ?: 0
+        return h.coerceIn(0, 23) to m.coerceIn(0, 59)
+    }
+
+    private fun formatPoint(raw: String): String {
+        val (h, m) = parsePoint(raw)
+        return two(h) + ":" + two(m)
+    }
+
+    private fun formatRange(raw: String): String {
+        val parts = raw.split("-")
+        if (parts.size != 2) {
+            return raw
+        }
+        return formatPoint(parts[0]) + "-" + formatPoint(parts[1])
+    }
+
+    private fun summarizeTimeList(list: List<String>, kind: TimeFieldKind): String {
+        val items = list.filter { it.isNotBlank() && it != "-1" }
+        if (items.isEmpty()) {
+            return "已关闭"
+        }
+        return if (kind == TimeFieldKind.RANGE) {
+            items.joinToString("、") { formatRange(it) }
+        } else {
+            items.joinToString("、") { formatPoint(it) }
+        }
+    }
+
+    /** 模型卡头部：状态点 + 名称 + 已开/总数 + 折叠箭头，点一下切换 */
+    private fun buildModelHeader(mc: ModelConfig, fields: List<ModelField<*>>, body: LinearLayout): View {
+        val boolFields = fields.filter { it.type == "BOOLEAN" }
+        val onCount = boolFields.count { it.value as? Boolean == true }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+            isClickable = true
+            isFocusable = true
+        }
+        header.addView(View(this).apply {
+            background = ContextCompat.getDrawable(this@NeoGroupFieldsActivity, R.drawable.neu_dot_status)
+            backgroundTintList = android.content.res.ColorStateList.valueOf(
+                ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_primary)
+            )
+            layoutParams = LinearLayout.LayoutParams(dp(8), dp(8))
+        })
+        header.addView(TextView(this).apply {
+            text = mc.name
+            textSize = 15f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_primary))
+            setPadding(dp(10), 0, 0, 0)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        if (boolFields.isNotEmpty()) {
+            header.addView(TextView(this).apply {
+                text = "$onCount/${boolFields.size} 开"
+                textSize = 12f
+                setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_hint))
+                setPadding(0, 0, dp(10), 0)
+            })
+        }
+        val chev = TextView(this).apply {
+            text = if (body.visibility == View.VISIBLE) "▾" else "▸"
+            textSize = 13f
+            setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_hint))
+        }
+        header.addView(chev)
+        header.setOnClickListener {
+            val expand = body.visibility != View.VISIBLE
+            body.visibility = if (expand) View.VISIBLE else View.GONE
+            chev.text = if (expand) "▾" else "▸"
+            expandedModels[mc.code] = expand
+        }
+        return header
+    }
+
+    private fun buildSectionTitle(text: String): View {
+        return TextView(this).apply {
+            this.text = text
+            textSize = 12f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_hint))
+            setPadding(0, dp(12), 0, dp(2))
+        }
+    }
+
+    private fun buildRowDivider(): View {
+        return View(this).apply {
+            setBackgroundColor(Color.parseColor("#F1F5FB"))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                Math.max(1, dp(1))
+            )
+        }
+    }
+
+    // ==================== 时间选择器 ====================
+
+    /** 按住连续加减：按下先执行一次，380ms 后每 70ms 重复一次（满足"长按连续"） */
+    private fun bindRepeat(view: View, action: () -> Unit) {
+        val handler = Handler(Looper.getMainLooper())
+        val runner = object : Runnable {
+            override fun run() {
+                action()
+                handler.postDelayed(this, 70L)
+            }
+        }
+        view.setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    action()
+                    handler.postDelayed(runner, 380L)
+                    true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    handler.removeCallbacks(runner)
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
+    /** 单个"▲ 数值 ▼ 单位"滚轮格 */
+    private fun createStepper(unit: String, initial: Int, mod: Int, onChange: (Int) -> Unit): LinearLayout {
+        var value = initial
+        val num = TextView(this).apply {
+            text = two(value)
+            textSize = 26f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_primary))
+            gravity = Gravity.CENTER
+        }
+        fun step(delta: Int) {
+            value = ((value + delta) % mod + mod) % mod
+            num.text = two(value)
+            onChange(value)
+        }
+        val up = TextView(this).apply {
+            text = "▲"
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_hint))
+            setPadding(dp(16), dp(2), dp(16), dp(2))
+        }
+        val down = TextView(this).apply {
+            text = "▼"
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_hint))
+            setPadding(dp(16), dp(2), dp(16), dp(2))
+        }
+        bindRepeat(up) { step(1) }
+        bindRepeat(down) { step(-1) }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            background = ContextCompat.getDrawable(this@NeoGroupFieldsActivity, R.drawable.neu_card_raised)
+            setPadding(dp(2), dp(6), dp(2), dp(4))
+            addView(up)
+            addView(num)
+            addView(down)
+            addView(TextView(this@NeoGroupFieldsActivity).apply {
+                text = unit
+                textSize = 10f
+                gravity = Gravity.CENTER
+                setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_hint))
+            })
+            layoutParams = LinearLayout.LayoutParams(dp(56), ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+    }
+
+    /** 开关胶囊行：左侧标题、右侧 开/关 */
+    private fun createToggleRow(title: String, desc: String?, initial: Boolean, onChanged: (Boolean) -> Unit): View {
+        var on = initial
+        val pill = TextView(this).apply {
+            textSize = 12f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+        }
+        fun renderPill() {
+            pill.text = if (on) "开" else "关"
+            pill.background = ContextCompat.getDrawable(
+                this@NeoGroupFieldsActivity,
+                if (on) R.drawable.neu_pill_on else R.drawable.neu_pill
+            )
+            pill.setTextColor(
+                ContextCompat.getColor(
+                    this@NeoGroupFieldsActivity,
+                    if (on) R.color.neo_primary else R.color.neo_text_hint
+                )
+            )
+        }
+        renderPill()
+        pill.isClickable = true
+        pill.setOnClickListener {
+            on = !on
+            renderPill()
+            onChanged(on)
+        }
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = ContextCompat.getDrawable(this@NeoGroupFieldsActivity, R.drawable.neu_card_raised)
+            isClickable = true
+        }
+        val textBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        textBox.addView(TextView(this).apply {
+            text = title
+            textSize = 13f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_primary))
+        })
+        if (!desc.isNullOrBlank()) {
+            textBox.addView(TextView(this).apply {
+                text = desc
+                textSize = 11f
+                setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_hint))
+            })
+        }
+        row.addView(textBox)
+        row.addView(pill)
+        row.setOnClickListener { pill.performClick() }
+        return row
+    }
+
+    private fun createDialogShell(title: String): Pair<Dialog, FrameLayout> {
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        dialog.setContentView(R.layout.neo_dialog_field_edit)
+        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.window?.setLayout(
+            resources.displayMetrics.widthPixels - dp(64),
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        dialog.findViewById<TextView>(R.id.neo_edit_title).text = title
+        return dialog to dialog.findViewById(R.id.neo_edit_content)
+    }
+
+    /** 时间点选择器：一天中的若干时刻，关闭时写回 -1 */
+    private fun showTimePointDialog(title: String, current: List<String>, onOk: (List<String>) -> Unit) {
+        val (dialog, content) = createDialogShell(title)
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
+        var enabled = !current.contains("-1")
+        val points = current.filter { it != "-1" }.map { parsePoint(it) }.toMutableList()
+        if (points.isEmpty()) {
+            points.add(6 to 55)
+            points.add(23 to 59)
+        }
+
+        root.addView(
+            createToggleRow("启用定时", "关掉后按「执行间隔」跑", enabled) { enabled = it },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        )
+
+        val listBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
+        fun rebuildPoints() {
+            listBox.removeAllViews()
+            points.forEachIndexed { idx, hm ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(12), dp(8), dp(10), dp(8))
+                    background = ContextCompat.getDrawable(this@NeoGroupFieldsActivity, R.drawable.neu_card_raised)
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).apply { setMargins(0, 0, 0, dp(8)) }
+                }
+                row.addView(TextView(this).apply {
+                    text = "第 ${idx + 1} 个"
+                    textSize = 12f
+                    setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_hint))
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                })
+                row.addView(createStepper("时", hm.first, 24) { v -> points[idx] = v to points[idx].second })
+                row.addView(TextView(this).apply {
+                    text = ":"
+                    textSize = 18f
+                    setTypeface(typeface, android.graphics.Typeface.BOLD)
+                    setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_hint))
+                    setPadding(dp(2), 0, dp(2), 0)
+                })
+                row.addView(createStepper("分", hm.second, 60) { v -> points[idx] = points[idx].first to v })
+                row.addView(TextView(this).apply {
+                    text = "删除"
+                    textSize = 12f
+                    setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_error))
+                    setPadding(dp(12), dp(8), dp(4), dp(8))
+                    setOnClickListener {
+                        if (points.size <= 1) {
+                            Toast.makeText(this@NeoGroupFieldsActivity, "至少保留一个时间点", Toast.LENGTH_SHORT).show()
+                        } else {
+                            points.removeAt(idx)
+                            rebuildPoints()
+                        }
+                    }
+                })
+                listBox.addView(row)
+            }
+            val add = TextView(this).apply {
+                text = "＋ 添加时间点"
+                textSize = 13f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_primary))
+                gravity = Gravity.CENTER
+                setPadding(0, dp(11), 0, dp(11))
+                background = ContextCompat.getDrawable(this@NeoGroupFieldsActivity, R.drawable.neu_input_bg)
+                setOnClickListener {
+                    if (points.size >= 6) {
+                        Toast.makeText(this@NeoGroupFieldsActivity, "最多 6 个时间点", Toast.LENGTH_SHORT).show()
+                    } else {
+                        points.add(12 to 0)
+                        rebuildPoints()
+                    }
+                }
+            }
+            listBox.addView(add, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(2) })
+        }
+        rebuildPoints()
+
+        val boxLp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        boxLp.topMargin = dp(12)
+        root.addView(listBox, boxLp)
+
+        content.addView(root, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+
+        dialog.findViewById<TextView>(R.id.neo_edit_cancel).setOnClickListener { dialog.dismiss() }
+        dialog.findViewById<TextView>(R.id.neo_edit_ok).setOnClickListener {
+            val out = if (enabled) points.map { two(it.first) + two(it.second) } else listOf("-1")
+            onOk(out)
+            dialog.dismiss()
+        }
+        dialog.show()
+    }
+
+    /** 时间段选择器：开始→结束，写回 HHMM-HHMM */
+    private fun showTimeRangeDialog(title: String, current: List<String>, onOk: (List<String>) -> Unit) {
+        val (dialog, content) = createDialogShell(title)
+        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
+        val raw = current.firstOrNull { it.contains("-") } ?: "0700-0731"
+        val parts = raw.split("-")
+        val start = parsePoint(parts.getOrElse(0) { "0700" })
+        val end = parsePoint(parts.getOrElse(1) { "0731" })
+        var sh = start.first
+        var sm = start.second
+        var eh = end.first
+        var em = end.second
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(10), dp(14), dp(10), dp(14))
+            background = ContextCompat.getDrawable(this@NeoGroupFieldsActivity, R.drawable.neu_card_raised)
+        }
+        val center = { t: String ->
+            TextView(this).apply {
+                text = t
+                textSize = 18f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_hint))
+                setPadding(dp(3), 0, dp(3), 0)
+            }
+        }
+        box.addView(createStepper("时", sh, 24) { sh = it })
+        box.addView(center(":"))
+        box.addView(createStepper("分", sm, 60) { sm = it })
+        box.addView(center("→"))
+        box.addView(createStepper("时", eh, 24) { eh = it })
+        box.addView(center(":"))
+        box.addView(createStepper("分", em, 60) { em = it })
+
+        val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        lp.topMargin = dp(8)
+        root.addView(box, lp)
+
+        root.addView(TextView(this).apply {
+            text = "只有落在这个时间段内才收能量，其他时间不动"
+            textSize = 11f
+            setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_hint))
+            gravity = Gravity.CENTER
+            setPadding(0, dp(10), 0, 0)
+        })
+
+        content.addView(root, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+
+        dialog.findViewById<TextView>(R.id.neo_edit_cancel).setOnClickListener { dialog.dismiss() }
+        dialog.findViewById<TextView>(R.id.neo_edit_ok).setOnClickListener {
+            onOk(listOf(two(sh) + two(sm) + "-" + two(eh) + two(em)))
             dialog.dismiss()
         }
         dialog.show()

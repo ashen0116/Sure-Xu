@@ -656,6 +656,31 @@ class NeoMainActivity : AppCompatActivity() {
             showLogSearchBar()
         }
         findViewById<View>(R.id.neo_logs_search_close).setOnClickListener { hideLogSearchBar() }
+
+        // 通俗 / 技术视图切换（右上角眼睛图标）
+        logHumanMode = logUiPrefs().getBoolean("log_human_mode", true)
+        val humanBtn = findViewById<View>(R.id.neo_logs_human_btn)
+        fun refreshHumanBtn() {
+            humanBtn.alpha = if (logHumanMode) 1f else 0.35f
+        }
+        refreshHumanBtn()
+        humanBtn.setOnClickListener {
+            haptic(it)
+            logHumanMode = !logHumanMode
+            logTechExpanded = false
+            logUiPrefs().edit().putBoolean("log_human_mode", logHumanMode).apply()
+            refreshHumanBtn()
+            renderLogEntries()
+            Toast.makeText(
+                this,
+                if (logHumanMode) "通俗视图：技术日志已折叠" else "技术视图：显示原始日志",
+                Toast.LENGTH_SHORT
+            ).show()
+        }
+        findViewById<View>(R.id.neo_logs_tech_bar).setOnClickListener {
+            logTechExpanded = !logTechExpanded
+            renderLogEntries()
+        }
         findViewById<EditText>(R.id.neo_logs_search_input).addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
@@ -709,6 +734,14 @@ class NeoMainActivity : AppCompatActivity() {
     private data class NeoLogEntry(val lineNumber: Int, val time: String?, val tag: String?, val body: String)
 
     private var currentLogTag: String = "森林"
+
+    /** 通俗视图开关（默认开）：Hook/接口等技术日志折叠，只留人话 */
+    private var logHumanMode: Boolean = true
+
+    /** 技术信息折叠条是否展开 */
+    private var logTechExpanded: Boolean = false
+
+    private fun logUiPrefs() = getSharedPreferences("sesame_ui_state", Context.MODE_PRIVATE)
     private var logEntries: List<NeoLogEntry> = emptyList()
 
     private val logRefreshHandler = Handler(Looper.getMainLooper())
@@ -829,8 +862,31 @@ class NeoMainActivity : AppCompatActivity() {
         val list = findViewById<LinearLayout>(R.id.neo_logs_list)
         val empty = findViewById<View>(R.id.neo_logs_empty)
         val query = findViewById<EditText>(R.id.neo_logs_search_input).text.toString().trim()
+        // 通俗视图：Hook 注入、接口返回等技术日志剥离出来，单独折叠成"技术信息"
+        val techEntries = if (logHumanMode) {
+            logEntries.filter { NeoLogText.isTechnical(it.tag, it.body) }
+        } else {
+            emptyList()
+        }
+        val baseEntries = if (logHumanMode) {
+            logEntries.filterNot { NeoLogText.isTechnical(it.tag, it.body) }
+        } else {
+            logEntries
+        }
+        val shownEntries = if (logHumanMode && logTechExpanded) baseEntries + techEntries else baseEntries
+        val techBar = findViewById<View>(R.id.neo_logs_tech_bar)
+        if (logHumanMode && techEntries.isNotEmpty()) {
+            techBar.visibility = View.VISIBLE
+            findViewById<TextView>(R.id.neo_logs_tech_text).text = if (logTechExpanded) {
+                "技术信息 ${techEntries.size} 条（点击收起）"
+            } else {
+                "技术信息 ${techEntries.size} 条（Hook 注入、接口返回等）"
+            }
+        } else {
+            techBar.visibility = View.GONE
+        }
         // 过滤在数据量最大 500 条内进行，纯内存操作很快；真正的卡顿源是 inflate/布局，已用复用解决
-        val filtered = logEntries.filter { e ->
+        val filtered = shownEntries.filter { e ->
             query.isEmpty() ||
                 (e.tag?.contains(query, ignoreCase = true) == true) ||
                 e.body.contains(query, ignoreCase = true)
@@ -853,7 +909,8 @@ class NeoMainActivity : AppCompatActivity() {
         repeat(minOf(childCount, count)) { i ->
             val entry = toRender[i]
             val card = list.getChildAt(i)
-            card.findViewById<TextView>(R.id.entry_tag).text = entry.tag ?: "日志"
+            card.findViewById<TextView>(R.id.entry_tag).text =
+                entry.tag?.let { NeoLogText.tag(it) } ?: currentLogTag
             card.findViewById<TextView>(R.id.entry_time).text = entry.time ?: ""
             val body = card.findViewById<TextView>(R.id.entry_body)
             if (entry.body.isBlank()) {
@@ -861,7 +918,7 @@ class NeoMainActivity : AppCompatActivity() {
                 body.text = ""
             } else {
                 body.visibility = View.VISIBLE
-                body.text = entry.body
+                body.text = if (logHumanMode) NeoLogText.body(entry.body) else entry.body
             }
             card.setOnClickListener { copyLogEntry(entry) }
             card.findViewById<View>(R.id.entry_copy).setOnClickListener { copyLogEntry(entry) }
@@ -879,13 +936,14 @@ class NeoMainActivity : AppCompatActivity() {
             for (i in childCount until count) {
                 val entry = toRender[i]
                 val card = layoutInflater.inflate(R.layout.neo_item_log_entry, list, false)
-                card.findViewById<TextView>(R.id.entry_tag).text = entry.tag ?: "日志"
+                card.findViewById<TextView>(R.id.entry_tag).text =
+                    entry.tag?.let { NeoLogText.tag(it) } ?: currentLogTag
                 card.findViewById<TextView>(R.id.entry_time).text = entry.time ?: ""
                 val body = card.findViewById<TextView>(R.id.entry_body)
                 if (entry.body.isBlank()) {
                     body.visibility = View.GONE
                 } else {
-                    body.text = entry.body
+                    body.text = if (logHumanMode) NeoLogText.body(entry.body) else entry.body
                 }
                 card.setOnClickListener { copyLogEntry(entry) }
                 card.findViewById<View>(R.id.entry_copy).setOnClickListener { copyLogEntry(entry) }

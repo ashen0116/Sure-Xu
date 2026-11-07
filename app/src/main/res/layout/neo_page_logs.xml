@@ -27,6 +27,14 @@
                 android:orientation="horizontal">
 
                 <ImageView
+                    android:id="@+id/neo_logs_human_btn"
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_marginEnd="14dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_neo_eye" />
+
+                <ImageView
                     android:id="@+id/neo_logs_search_btn"
                     android:layout_width="20dp"
                     android:layout_height="20dp"
@@ -162,6 +170,35 @@
                 android:text="切换分类或执行对应操作后在此实时展示"
                 android:textColor="@color/neo_text_hint"
                 android:textSize="12sp" />
+        </LinearLayout>
+
+        <!-- 技术信息折叠条：通俗视图下把 Hook/接口等技术日志收进这里 -->
+        <LinearLayout
+            android:id="@+id/neo_logs_tech_bar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/neu_card_raised"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="12dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/neo_logs_tech_text"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="技术信息"
+                android:textColor="@color/neo_text_hint"
+                android:textSize="12sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="›"
+                android:textColor="@color/neo_text_hint"
+                android:textSize="18sp" />
         </LinearLayout>
 
         <!-- 日志条目列表容器（每条为拟态卡片，由 Kotlin 填充） -->
