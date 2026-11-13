@@ -226,6 +226,12 @@ public class ModelField<T> implements Serializable {
         value = defaultValue;
     }
 
+    /** 当前值是否还是代码里的默认值（配置页用来判断「当前是不是系统默认配置」） */
+    @JsonIgnore
+    public boolean isDefaultValue() {
+        return Objects.equals(value, defaultValue);
+    }
+
     /**
      * 加载后按本字段自身的刻度语义夹一遍越界值，默认不处理。
      * <p>不能放进 {@link #setValue}：那是 Jackson 的入口，带单位换算的子类会被按错误刻度截断。

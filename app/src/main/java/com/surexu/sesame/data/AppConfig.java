@@ -54,6 +54,8 @@ public class AppConfig {
     private Boolean enableGoldenBeansLog = true;
     private Boolean enableFarmLog = true;
     private Boolean enableOtherLog = true;
+    private Boolean enableVillageLog = true;
+    private Boolean enableSportsLog = true;
     private Boolean enableDebugLog = false;
     private Boolean enableViewErrorLog = true;
     private Boolean enableViewRuntimeLog = true;
@@ -141,6 +143,12 @@ public class AppConfig {
 
     public Boolean getEnableOtherLog() { return enableOtherLog; }
     public void setEnableOtherLog(Boolean value) { enableOtherLog = value; }
+
+    public Boolean getEnableVillageLog() { return enableVillageLog; }
+    public void setEnableVillageLog(Boolean value) { enableVillageLog = value; }
+
+    public Boolean getEnableSportsLog() { return enableSportsLog; }
+    public void setEnableSportsLog(Boolean value) { enableSportsLog = value; }
 
     public Boolean getEnableDebugLog() { return enableDebugLog; }
     public void setEnableDebugLog(Boolean value) { enableDebugLog = value; }

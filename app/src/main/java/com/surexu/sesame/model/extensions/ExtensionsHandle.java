@@ -64,6 +64,33 @@ public class ExtensionsHandle {
             case "mockRequest":
                 mockRequest(fun, (String) data);
                 break;
+            case "openUrl":
+                // UI 侧「打开视频红包页」用：视频页没有公开入口，只能靠任务里的 btnLinkUrl 直达，
+                // 由支付宝进程自己 startActivity 才不会被跨包/包可见性拦住
+                openUrl(fun);
+                break;
+        }
+    }
+
+    /** 在支付宝进程内按 alipays:// 链接打开页面（阻塞式记录结果） */
+    private static void openUrl(String url) {
+        try {
+            if (StringUtil.isEmpty(url)) {
+                Log.record("打开页面失败：链接为空");
+                return;
+            }
+            Intent intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME);
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            Context ctx = ApplicationHook.getContext();
+            if (ctx == null) {
+                Log.record("打开页面失败：上下文为空");
+                return;
+            }
+            ctx.startActivity(intent);
+            Log.record("已打开页面: " + url);
+        } catch (Throwable t) {
+            Log.record("打开页面异常: " + t.getClass().getSimpleName());
+            Log.printStackTrace(TAG, t);
         }
     }
 

@@ -26,11 +26,13 @@ import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.ViewGroup
 import android.view.Window
+import android.widget.ArrayAdapter
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -49,6 +51,7 @@ import com.surexu.sesame.data.ModelGroup
 import com.surexu.sesame.data.RunType
 import com.surexu.sesame.data.ViewAppInfo
 import com.surexu.sesame.entity.UserEntity
+import com.surexu.sesame.util.FeatureStats
 import com.surexu.sesame.util.FileUtil
 import com.surexu.sesame.util.LanguageUtil
 import com.surexu.sesame.util.Statistics
@@ -88,9 +91,9 @@ class NeoMainActivity : AppCompatActivity() {
         /** 激活探测重试间隔(毫秒) */
         private const val RUN_TYPE_PROBE_INTERVAL_MS = 3000L
 
-        // ===== 能量统计实时刷新 =====
-        /** 能量统计卡自动刷新间隔(毫秒)：注入进程落盘 statistics.json 后 UI 定时拉新 */
-        private const val STATS_REFRESH_INTERVAL_MS = 30000L
+        // ===== 首页实时刷新 =====
+        /** 首页数据自动刷新间隔(毫秒)：2 秒拉一次磁盘快照，日志里数字涨了首页要跟着变 */
+        private const val STATS_REFRESH_INTERVAL_MS = 2000L
 
         // ===== 日志页常量（与旧版模块 UI 日志页逻辑对齐） =====
         /** 日志自动刷新间隔(毫秒) */
@@ -101,6 +104,13 @@ class NeoMainActivity : AppCompatActivity() {
         const val LOG_MAX_ENTRIES = 500
         /** 单次渲染最多生成的日志卡片数（超出只显示最新部分，配合 View 复用避免卡顿） */
         const val LOG_MAX_RENDER = 200
+
+        /**
+         * 视频红包页直达入口。
+         * <p>取自支付有礼「逛15s搞钱攻略视频」任务的 btnLinkUrl —— 该页面没有公开入口，
+         * 底部"视频"tab 是新闻短视频，不是同一个页面。
+         */
+        private const val VIDEO_REWARD_URL = "alipays://platformapi/startapp?appId=77700199&startMultApp=YES&appClearTop=NO&chInfo=zhifuyouli_ALL_CATEGORY&page=%2Fpages%2Findex%2Findex%3Fscene%3DuserLine%26fromscenario%3Dzhuangyuan%26videoGroup%3DALL_CATEGORY"
     }
 
     override fun attachBaseContext(newBase: Context) {
@@ -131,6 +141,15 @@ class NeoMainActivity : AppCompatActivity() {
     /** 主界面是否处于前台：后台/二级页停留时不改账号选择，防止配置页保存串写账号 */
     private var resumed = false
 
+    /** 支付宝回包带过来的真实登录账号：自动切号成功后首页状态行要跟着换 */
+    private var hostUid: String = ""
+
+    /** 底部「首页」上次点击时间，用来识别双击刷新 */
+    private var lastHomeNavClickMs = 0L
+
+    /** 点「执行」的时刻：比它更早的进度账本属于上一轮，不回灌到刚归零的界面 */
+    private var lastProgressResetAt = 0L
+
     /** 立即备份选择位置保存时暂存待写入的配置内容。 */
     private var pendingBackupJson: String? = null
 
@@ -139,6 +158,8 @@ class NeoMainActivity : AppCompatActivity() {
     private val statsRefreshRunnable = object : Runnable {
         override fun run() {
             bindEnergyStats()
+            // 进度条也一起兜底读盘：广播丢了一条，2 秒内自己会追上
+            loadRunProgressForUi()
             statsRefreshHandler.postDelayed(this, STATS_REFRESH_INTERVAL_MS)
         }
     }
@@ -178,6 +199,18 @@ class NeoMainActivity : AppCompatActivity() {
         navItems.forEachIndexed { index, item ->
             item.setOnClickListener {
                 haptic(item)
+                // 快速双击底部「首页」＝刷新首页信息，跟右上角「刷新」一个效果
+                if (index == 0) {
+                    val now = System.currentTimeMillis()
+                    if (now - lastHomeNavClickMs < 400L) {
+                        lastHomeNavClickMs = 0L
+                        bindEnergyStats()
+                        loadRunProgressForUi()
+                        Toast.makeText(this@NeoMainActivity, "已刷新", Toast.LENGTH_SHORT).show()
+                    } else {
+                        lastHomeNavClickMs = now
+                    }
+                }
                 switchPage(index)
             }
         }
@@ -224,6 +257,8 @@ class NeoMainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        // 主界面回到前台：允许状态广播把支付宝当前登录账号同步过来（原来从没置过 true，切号后界面一直不换）
+        resumed = true
         // 回到前台时若仍为未加载，按模块版机制周期性发查询广播等待支付宝进程回包（不覆盖晚到的广播信号）
         if (RunType.DISABLE == ViewAppInfo.getRunType()) {
             runTypeProbeHandler.removeCallbacks(runTypeProbeRunnable)
@@ -254,6 +289,8 @@ class NeoMainActivity : AppCompatActivity() {
         super.onDestroy()
         stopLogAutoRefresh()
         runTypeProbeHandler.removeCallbacks(runTypeProbeRunnable)
+        // 2 秒轮询改成必须随页面销毁一起撤掉，否则界面关了还在后台刷盘
+        statsRefreshHandler.removeCallbacks(statsRefreshRunnable)
         try {
             unregisterReceiver(statusReceiver)
         } catch (e: Exception) {
@@ -327,6 +364,91 @@ class NeoMainActivity : AppCompatActivity() {
             Toast.makeText(this, "已发送重启支付宝指令", Toast.LENGTH_SHORT).show()
         }
         findViewById<View>(R.id.neo_home_more_btn).setOnClickListener { showConfigMenu() }
+        findViewById<View>(R.id.neo_home_refresh_btn).setOnClickListener {
+            haptic(it)
+            bindEnergyStats()
+            Toast.makeText(this, "已刷新", Toast.LENGTH_SHORT).show()
+        }
+        findViewById<View>(R.id.neo_home_run_btn).setOnClickListener { runAllTasksNow() }
+        findViewById<View>(R.id.neo_home_stop_btn).setOnClickListener { stopAllTasksNow() }
+        // 视频红包页没有公开入口，单独给个首页按钮直达，方便每天手动点提现
+        findViewById<View>(R.id.neo_home_video_btn).setOnClickListener {
+            haptic(it)
+            openVideoRewardPage()
+        }
+        bindHomeToggles()
+        bindBootSilence()
+        renderRunProgress()
+        loadRunProgressForUi()
+    }
+
+    /** 执行规则说明：新版只认三种触发，旧的「启动静默」开关已不再拦任务 */
+    private fun bindBootSilence() {
+        refreshBootSilenceText()
+    }
+
+    private fun refreshBootSilenceText() {
+        val hint = findViewById<TextView>(R.id.neo_home_silence_hint) ?: return
+        hint.text = "其它情况一律不自动执行；点「停止」可随时中断本轮"
+    }
+
+    /** 立即跑一轮全部任务：发模块的 execute 广播，group=BASE 表示不分组、全跑 */
+    private fun runAllTasksNow() {
+        try {
+            // 手动点执行：先把上一轮清单清掉、状态置为进行中，等注入进程写回新的账本
+            runItems.clear()
+            runPhase = "running"
+            lastProgressResetAt = System.currentTimeMillis()
+            renderRunProgress()
+            val intent = Intent("com.eg.android.AlipayGphone.sesame.execute")
+            intent.putExtra("group", ModelGroup.BASE.code)
+            sendBroadcast(intent)
+            Toast.makeText(this, "已通知支付宝立即执行一轮", Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            Toast.makeText(this, "执行失败：" + (e.message ?: ""), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** 立即停止：停掉主链和所有正在跑的功能；定时链仍会排到下一个间隔/定点 */
+    private fun stopAllTasksNow() {
+        try {
+            sendBroadcast(Intent("com.eg.android.AlipayGphone.sesame.stop"))
+            Toast.makeText(this, "已通知支付宝停止全部任务", Toast.LENGTH_SHORT).show()
+            loadRunProgressForUi()
+        } catch (e: Exception) {
+            Toast.makeText(this, "停止失败：" + (e.message ?: ""), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * 视频红包页没有公开入口（底部"视频"tab 是新闻短视频，不是这个），
+     * 只能借支付有礼任务下发的 btnLinkUrl 直达，故在菜单里放一个快捷入口；
+     * 满 8 次后页面右上角会出现「提现 X 元」，点一下即可，提现接口未抓到、只能人工点。
+     */
+    private fun openVideoRewardPage() {
+        // 以前发广播让支付宝后台进程去开页面，Android 10+ 会静默拦掉后台启动 Activity，
+        // 界面还无条件弹「正在打开」，看起来就是按了没反应。改成界面在前台自己拉起支付宝。
+        try {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(VIDEO_REWARD_URL))
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            intent.setPackage("com.eg.android.AlipayGphone")
+            startActivity(intent)
+            return
+        } catch (e: Exception) {
+            // 支付宝版本不认这个 alipays:// 直达地址时，退回打开支付宝首页，至少能把 App 拉起来
+            try {
+                val fallback = packageManager.getLaunchIntentForPackage("com.eg.android.AlipayGphone")
+                if (fallback != null) {
+                    fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    startActivity(fallback)
+                    Toast.makeText(this, "已打开支付宝，请进视频页点提现", Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, "没找到支付宝，无法打开", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e2: Exception) {
+                Toast.makeText(this, "打开失败：" + (e2.message ?: ""), Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     /** 三点菜单：默认配置 / 清除配置（拟态卡片弹窗，与首页同套 UI 语言）。 */
@@ -341,6 +463,17 @@ class NeoMainActivity : AppCompatActivity() {
         val width = (resources.displayMetrics.widthPixels - (64 * resources.displayMetrics.density).toInt())
         dialog.window?.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT)
 
+        dialog.findViewById<TextView>(R.id.neo_dialog_config_state).text =
+            "当前正在使用" + currentConfigLabel(restoreSelectedAccount())
+
+        dialog.findViewById<View>(R.id.neo_dialog_run).setOnClickListener {
+            dialog.dismiss()
+            runAllTasksNow()
+        }
+        dialog.findViewById<View>(R.id.neo_dialog_video).setOnClickListener {
+            dialog.dismiss()
+            openVideoRewardPage()
+        }
         dialog.findViewById<View>(R.id.neo_dialog_enable_all).setOnClickListener {
             dialog.dismiss()
             setAllModelsEnabled(true)
@@ -349,13 +482,17 @@ class NeoMainActivity : AppCompatActivity() {
             dialog.dismiss()
             setAllModelsEnabled(false)
         }
+        dialog.findViewById<View>(R.id.neo_dialog_save).setOnClickListener {
+            dialog.dismiss()
+            showSavePresetDialog()
+        }
         dialog.findViewById<View>(R.id.neo_dialog_default).setOnClickListener {
             dialog.dismiss()
-            restoreDefaultConfig()
+            showRestorePresetDialog()
         }
         dialog.findViewById<View>(R.id.neo_dialog_clear).setOnClickListener {
             dialog.dismiss()
-            clearConfig()
+            showClearPresetDialog()
         }
         dialog.findViewById<View>(R.id.neo_dialog_cancel).setOnClickListener {
             dialog.dismiss()
@@ -390,6 +527,139 @@ class NeoMainActivity : AppCompatActivity() {
             ).show()
         } catch (e: Exception) {
             Toast.makeText(this, "操作失败：" + (e.message ?: ""), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** 保存当前配置：先选位置（配置1~5），再把当前配置文件整份复制过去 */
+    private fun showSavePresetDialog() {
+        showOptionDialog("保存到哪个位置", (1..5).map { "配置$it" }) { index ->
+            val slot = index + 1
+            if (savePresetConfig(slot)) {
+                Toast.makeText(this, "已保存到配置$slot", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "保存失败：读不到当前配置", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /** 恢复配置：系统默认值 + 5 个保存位置，选哪个恢复哪个 */
+    private fun showRestorePresetDialog() {
+        val options = listOf("系统默认值") + (1..5).map { "配置$it" }
+        showOptionDialog("恢复到哪个配置", options) { index ->
+            if (index == 0) {
+                restoreDefaultConfig()
+                return@showOptionDialog
+            }
+            if (restorePresetConfig(index)) {
+                Toast.makeText(this, "已恢复到配置$index", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "配置$index 还没有保存过", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /** 当前账号实际使用的配置文件；userId 为空时是公共默认配置 */
+    private fun activeConfigFile(userId: String?): File =
+        if (userId.isNullOrEmpty()) FileUtil.getDefaultConfigV2File() else FileUtil.getConfigV2File(userId)
+
+    /** 存档文件：和正式配置同目录，按账号分开，名字是 preset_1.json ~ preset_5.json */
+    private fun presetConfigFile(userId: String?, slot: Int): File =
+        File(activeConfigFile(userId).parentFile, "preset_$slot.json")
+
+    /**
+     * 判断当前这份配置是从哪来的：
+     * 先和 5 个存档逐份比内容，一样就显示「配置N」；
+     * 再逐项和代码里的默认值比，全都一样就是「系统默认配置」；否则「自定义配置」。
+     */
+    private fun currentConfigLabel(userId: String?): String {
+        return try {
+            val cur = activeConfigFile(userId)
+            if (!cur.exists()) return "系统默认配置"
+            val text = cur.readText()
+            for (slot in 1..5) {
+                val f = presetConfigFile(userId, slot)
+                if (f.exists() && f.readText() == text) return "配置$slot"
+            }
+            Model.initAllModel()
+            ConfigV2.load(userId)
+            var allDefault = true
+            outer@ for (code in Model.getModelConfigMap().keys) {
+                val fields = ConfigV2.INSTANCE.getModelFields(code) ?: continue
+                for (field in fields.values) {
+                    if (!field.isDefaultValue) {
+                        allDefault = false
+                        break@outer
+                    }
+                }
+            }
+            if (allDefault) "系统默认配置" else "自定义配置"
+        } catch (e: Exception) {
+            "自定义配置"
+        }
+    }
+
+    /** 清除配置：可以只清某个存档，也可以清全部 */
+    private fun showClearPresetDialog() {
+        val options = listOf("全部配置") + (1..5).map { "配置$it" }
+        showOptionDialog("清除哪个配置", options) { index ->
+            if (index == 0) {
+                clearConfig()
+                return@showOptionDialog
+            }
+            val slot = index
+            if (clearPresetConfig(slot)) {
+                Toast.makeText(this, "已清除配置$slot", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, "配置$slot 本来就是空的", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /** 删掉第 slot 个存档（1~5），只动存档，不碰当前正在用的配置 */
+    private fun clearPresetConfig(slot: Int): Boolean {
+        return try {
+            val file = presetConfigFile(restoreSelectedAccount(), slot)
+            file.exists() && file.delete()
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** 把当前配置存进第 slot 个位置（1~5），已有内容直接覆盖 */
+    private fun savePresetConfig(slot: Int): Boolean {
+        return try {
+            val userId = restoreSelectedAccount()
+            Model.initAllModel()
+            ConfigV2.load(userId)
+            // 先把内存里尚未落盘的改动写进正式配置，保证存下来的是界面上看到的这一份
+            ConfigV2.save(userId, true)
+            val src = activeConfigFile(userId)
+            if (!src.exists()) return false
+            val dst = presetConfigFile(userId, slot)
+            dst.parentFile?.mkdirs()
+            dst.writeText(src.readText())
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** 从第 slot 个位置恢复（1~5）；覆盖前先滚动备份当前配置 */
+    private fun restorePresetConfig(slot: Int): Boolean {
+        return try {
+            val userId = restoreSelectedAccount()
+            val src = presetConfigFile(userId, slot)
+            if (!src.exists()) return false
+            val dst = activeConfigFile(userId)
+            FileUtil.backupConfigV2WithRolling(userId)
+            dst.parentFile?.mkdirs()
+            dst.writeText(src.readText())
+            ConfigV2.unload()
+            ConfigV2.load(userId)
+            sendBroadcast(Intent("com.eg.android.AlipayGphone.sesame.restart"))
+            true
+        } catch (e: Exception) {
+            false
         }
     }
 
@@ -439,48 +709,383 @@ class NeoMainActivity : AppCompatActivity() {
         }
     }
 
-    /** 能量统计首次读盘标记：避免冷启动首帧被 statistics.json 读盘+格式化写盘阻塞。 */
+    /** 首页统计首次读盘标记：避免冷启动首帧被 statistics.json 读盘+格式化写盘阻塞。 */
     private val statsLoadedOnce = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    /** 首页能量统计卡：总量/今年/本月/今日 × 收取/帮收/浇水，数据来自 Statistics 快照。 */
+    /** 当前时间档位：今日/本月/今年/累计，森林卡与各功能卡共用 */
+    private var statPeriod = Statistics.TimeType.DAY
+
+    private class FeatureMetric(val key: String, val label: String)
+
+    private class FeatureCardSpec(
+        val name: String,
+        val icon: String,
+        /** FeatureStats 里的功能名（与模型 getName 一致） */
+        val model: String,
+        val metrics: List<FeatureMetric>
+    )
+
+    private val featureCardSpecs = listOf(
+        FeatureCardSpec("小鸡", "🐣", "庄园", listOf(
+            FeatureMetric("egg", "收蛋 颗"), FeatureMetric("donate", "捐蛋 颗"), FeatureMetric("feed", "喂食 g"))),
+        FeatureCardSpec("海洋", "🌊", "海洋", listOf(
+            FeatureMetric("energy", "能量 g"), FeatureMetric("fish", "摸鱼 次"), FeatureMetric("puzzle", "拼图 块"))),
+        FeatureCardSpec("新村", "🏘", "新村", listOf(
+            FeatureMetric("coin", "木兰币"), FeatureMetric("ticket", "贴罚单"), FeatureMetric("booth", "摆摊 次"))),
+        FeatureCardSpec("芭芭农场", "🌳", "农场", listOf(
+            FeatureMetric("fertilizer", "肥料 g"), FeatureMetric("spread", "浇肥 次"),
+            FeatureMetric("gain", "今日得肥 g"))),
+        FeatureCardSpec("花呗金", "💳", "花呗金", listOf(
+            FeatureMetric("sign", "签到 次"), FeatureMetric("gold", "花呗金 个"),
+            FeatureMetric("hhk", "花花卡 张")))
+    )
+
+    private fun colorOf(id: Int): Int = androidx.core.content.ContextCompat.getColor(this, id)
+
+    /** 首页仪表盘：森林能量 + 各功能统计，数据来自 statistics.json / feature_stats.json 快照 */
     private fun bindEnergyStats() {
-        // 独立 App 进程不随支付宝注入，需读磁盘 statistics.json；
-        // 首次改后台线程读盘，回主线程填充，首帧只展示内存快照（未加载时为 0 占位）。
-        // 后续 onResume / 30s 定时 / update 广播直接走内存快照填充，不再阻塞主线程。
+        if (!pageInited[0]) return
+        // 独立 App 进程不随支付宝注入，需读磁盘快照；首次放后台线程，避免首帧卡住
         if (statsLoadedOnce.compareAndSet(false, true)) {
             Thread {
                 try {
-                    Statistics.load()
+                    Statistics.loadForUi()
                 } catch (th: Throwable) {
-                    // 读盘失败时保留占位值
+                    // 读盘失败保留占位值
                 }
-                runOnUiThread { fillEnergyStats() }
+                try {
+                    FeatureStats.reload()
+                } catch (th: Throwable) {
+                }
+                runOnUiThread { fillHomeStats() }
             }.start()
         } else {
-            fillEnergyStats()
+            // 每次刷新都重读「当前账号」的统计快照：原来只在首次读一次，
+            // 所以日志里数字涨了首页还停在老数字；也避免界面进程反过来写统计文件
+            try {
+                Statistics.loadForUi()
+            } catch (th: Throwable) {
+            }
+            try {
+                FeatureStats.reload()
+            } catch (th: Throwable) {
+            }
+            fillHomeStats()
+        }
+        // 静默倒计时跟着首页 2 秒刷新一起走
+        refreshBootSilenceText()
+    }
+
+    private fun rangeLabel(tt: Statistics.TimeType): String = when (tt) {
+        Statistics.TimeType.DAY -> "今日"
+        Statistics.TimeType.MONTH -> "本月"
+        Statistics.TimeType.YEAR -> "今年"
+        else -> "累计"
+    }
+
+    private fun statPeriodOf(tt: Statistics.TimeType): FeatureStats.Period = when (tt) {
+        Statistics.TimeType.DAY -> FeatureStats.Period.DAY
+        Statistics.TimeType.MONTH -> FeatureStats.Period.MONTH
+        Statistics.TimeType.YEAR -> FeatureStats.Period.YEAR
+        else -> FeatureStats.Period.ALL
+    }
+
+    private fun fmtNumber(v: Double): String =
+        if (Math.abs(v - Math.round(v)) < 0.05) String.format("%,d", Math.round(v))
+        else String.format("%,.1f", v)
+
+    /** 首页列表上次重绘时的数据指纹：2 秒刷新只在数据真变了才重建卡片，避免反复 addView 卡顿 */
+    private var lastHomeDataKey: String = ""
+
+    /** 「其他功能」要展示的子功能清单：常见功能 + 所有跑过、埋过点名的功能 */
+    private fun otherFeatureNames(): List<String> {
+        val names = LinkedHashSet<String>()
+        names.addAll(listOf("游戏中心", "消费金", "百次立减", "花呗金", "内容种草滑动红包",
+                "农场", "新村", "运动", "会员", "古树", "保护", "物种", "森林", "庄园"))
+        try {
+            names.addAll(FeatureStats.allFeatureNames())
+        } catch (th: Throwable) {
+        }
+        return names.toList()
+    }
+
+    private fun homeDataFingerprint(tt: Statistics.TimeType): String {
+        val sb = StringBuilder().append(tt.ordinal).append('|')
+                .append(Statistics.getData(tt, Statistics.DataType.COLLECTED)).append('|')
+                .append(Statistics.getRoundCollected()).append('|')
+        val period = statPeriodOf(tt)
+        for (spec in featureCardSpecs) {
+            sb.append(FeatureStats.lastRun(spec.model)).append(':')
+            for (m in spec.metrics) {
+                sb.append(FeatureStats.get(spec.model, m.key, period)).append(',')
+            }
+            sb.append('|')
+        }
+        for (name in otherFeatureNames()) {
+            sb.append(name).append(':')
+                    .append(FeatureStats.lastRun(name)).append(':')
+                    .append(FeatureStats.status(name)).append(':')
+                    .append(FeatureStats.todayPoints(name)).append('|')
+        }
+        // 「中途断开」按起跑超过 10 分钟判断，时间也要参与指纹，否则过了 10 分钟界面不更新
+        sb.append(System.currentTimeMillis() / 60000L)
+        return sb.toString()
+    }
+
+    private fun fillHomeStats() {
+        val tt = statPeriod
+        fun stat(id: Int, d: Statistics.DataType) {
+            findViewById<TextView>(id).text = String.format("%,d", Statistics.getData(tt, d))
+        }
+
+        findViewById<TextView>(R.id.neo_home_forest_title).text = "森林 · ${rangeLabel(tt)}收取"
+        val collected = Statistics.getData(tt, Statistics.DataType.COLLECTED)
+        findViewById<TextView>(R.id.neo_home_forest_value).text = String.format("%,d", collected)
+        val cmp = listOf(Statistics.TimeType.MONTH, Statistics.TimeType.YEAR, Statistics.TimeType.ALL)
+            .filter { it != tt }
+            .joinToString("\n") { "${rangeLabel(it)} ${String.format("%,d", Statistics.getData(it, Statistics.DataType.COLLECTED))}" }
+        findViewById<TextView>(R.id.neo_home_forest_cmp).text = cmp
+        stat(R.id.neo_home_tile_help, Statistics.DataType.HELPED)
+        stat(R.id.neo_home_tile_water, Statistics.DataType.WATERED)
+        stat(R.id.neo_home_tile_watered, Statistics.DataType.WATEREDCOUNT)
+        stat(R.id.neo_home_tile_watering, Statistics.DataType.WATERINGCOUNT)
+
+        // 「本期占累计」和那根进度条没有实际意义，已从布局里删掉，这里只留本轮已收
+        findViewById<TextView>(R.id.neo_home_forest_round).text = "本轮已收 ${Statistics.getRoundCollected()} g"
+
+        val tabs = listOf(
+            Statistics.TimeType.DAY to R.id.neo_home_range_day,
+            Statistics.TimeType.MONTH to R.id.neo_home_range_month,
+            Statistics.TimeType.YEAR to R.id.neo_home_range_year,
+            Statistics.TimeType.ALL to R.id.neo_home_range_all
+        )
+        for ((t, id) in tabs) {
+            val tv = findViewById<TextView>(id)
+            val selected = t == tt
+            tv.setBackgroundResource(if (selected) R.drawable.neo_home_range_on else 0)
+            tv.setTextColor(colorOf(if (selected) R.color.neo_primary else R.color.neo_text_hint))
+            tv.setOnClickListener {
+                statPeriod = t
+                fillHomeStats()
+            }
+        }
+
+        val dataKey = homeDataFingerprint(tt)
+        if (dataKey != lastHomeDataKey) {
+            lastHomeDataKey = dataKey
+            fillFeatureCards(tt)
+            fillMoreFeatures()
+        }
+        fillSwitchCard()
+        updateEnergyStatus()
+    }
+
+    /** 各功能卡：每个功能一行，显示当前档位的 2~3 个指标 */
+    private fun fillFeatureCards(tt: Statistics.TimeType) {
+        val box = findViewById<LinearLayout>(R.id.neo_home_feature_container)
+        box.removeAllViews()
+        findViewById<TextView>(R.id.neo_home_feature_title).text = "各功能 · ${rangeLabel(tt)}"
+        val period = statPeriodOf(tt)
+        for (spec in featureCardSpecs) {
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundResource(R.drawable.neu_card_raised)
+                setPadding(dp(13), dp(10), dp(13), dp(10))
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(8) }
+            }
+
+            val head = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+            }
+            val name = TextView(this).apply {
+                text = "${spec.icon} ${spec.name}"
+                textSize = 13f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(colorOf(R.color.neo_text_primary))
+            }
+            head.addView(name, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            val last = try {
+                FeatureStats.lastRun(spec.model)
+            } catch (th: Throwable) {
+                0L
+            }
+            val lastText = TextView(this).apply {
+                text = if (last > 0) "上次 " + java.text.SimpleDateFormat("HH:mm", java.util.Locale.ROOT).format(java.util.Date(last)) else "上次 —"
+                textSize = 10f
+                setTextColor(colorOf(R.color.neo_text_hint))
+            }
+            head.addView(lastText)
+            card.addView(head)
+
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, dp(10), 0, 0)
+            }
+            spec.metrics.forEachIndexed { mi, m ->
+                val cell = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setBackgroundResource(R.drawable.neu_card_pressed)
+                    setPadding(dp(10), dp(8), dp(10), dp(8))
+                }
+                val value = try {
+                    fmtNumber(FeatureStats.get(spec.model, m.key, period))
+                } catch (th: Throwable) {
+                    "0"
+                }
+                cell.addView(TextView(this).apply {
+                    text = value
+                    textSize = 16f
+                    typeface = android.graphics.Typeface.DEFAULT_BOLD
+                    setTextColor(colorOf(R.color.neo_text_primary))
+                })
+                cell.addView(TextView(this).apply {
+                    text = m.label
+                    textSize = 10f
+                    setTextColor(colorOf(R.color.neo_text_hint))
+                })
+                row.addView(cell, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    marginEnd = if (mi < spec.metrics.lastIndex) dp(8) else 0
+                })
+            }
+            card.addView(row)
+            box.addView(card)
         }
     }
 
-    private fun fillEnergyStats() {
-        fun fill(id: Int, tt: Statistics.TimeType, dt: Statistics.DataType) {
-            findViewById<TextView>(id).text = String.format("%,d", Statistics.getData(tt, dt))
+    /** 其他功能：列出所有子功能，显示今日点数和「今日已跑 / 中途断开」等状态 */
+    private fun fillMoreFeatures() {
+        val box = findViewById<LinearLayout>(R.id.neo_home_more_container)
+        box.removeAllViews()
+        val list = otherFeatureNames()
+        val todayKey = java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.ROOT).format(java.util.Date())
+        list.forEachIndexed { index, modelName ->
+            val last = try {
+                FeatureStats.lastRun(modelName)
+            } catch (th: Throwable) {
+                0L
+            }
+            val ranToday = last > 0 && java.text.SimpleDateFormat("yyyyMMdd", java.util.Locale.ROOT).format(java.util.Date(last)) == todayKey
+            val status = try {
+                FeatureStats.status(modelName)
+            } catch (th: Throwable) {
+                ""
+            }
+            val points = try {
+                FeatureStats.todayPoints(modelName)
+            } catch (th: Throwable) {
+                0.0
+            }
+            // 起跑后超过 10 分钟还没写收尾状态，就是中途断开（进程被杀 / 支付宝重启）
+            val stateText = when {
+                !ranToday -> "今天未跑"
+                status == "running" && System.currentTimeMillis() - last > 10 * 60 * 1000L -> "中途断开"
+                status == "partial" -> "部分完成"
+                status == "failed" -> "执行异常"
+                else -> "今日已跑"
+            }
+            val stateColor = if (stateText == "中途断开" || stateText == "执行异常")
+                R.color.neo_text_hint else R.color.neo_primary
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(0, dp(10), 0, dp(10))
+            }
+            row.addView(TextView(this).apply {
+                text = modelName
+                textSize = 12f
+                setTextColor(colorOf(R.color.neo_text_secondary))
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            row.addView(TextView(this).apply {
+                text = if (points > 0) "${fmtNumber(points)}点" else "—"
+                textSize = 11f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(colorOf(R.color.neo_text_primary))
+            })
+            row.addView(TextView(this).apply {
+                text = stateText
+                textSize = 10f
+                setTextColor(colorOf(stateColor))
+                setPadding(dp(8), 0, 0, 0)
+            })
+            box.addView(row)
+            if (index < list.size - 1) {
+                box.addView(View(this).apply {
+                    setBackgroundColor(android.graphics.Color.parseColor("#F1F5FB"))
+                }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(1)))
+            }
         }
-        // 列：今日 / 本月 / 今年；行：收 / 帮 / 浇 / 被水 / 浇水
-        fill(R.id.neo_home_energy_collect_day, Statistics.TimeType.DAY, Statistics.DataType.COLLECTED)
-        fill(R.id.neo_home_energy_collect_month, Statistics.TimeType.MONTH, Statistics.DataType.COLLECTED)
-        fill(R.id.neo_home_energy_collect_year, Statistics.TimeType.YEAR, Statistics.DataType.COLLECTED)
-        fill(R.id.neo_home_energy_help_day, Statistics.TimeType.DAY, Statistics.DataType.HELPED)
-        fill(R.id.neo_home_energy_help_month, Statistics.TimeType.MONTH, Statistics.DataType.HELPED)
-        fill(R.id.neo_home_energy_help_year, Statistics.TimeType.YEAR, Statistics.DataType.HELPED)
-        fill(R.id.neo_home_energy_water_day, Statistics.TimeType.DAY, Statistics.DataType.WATERED)
-        fill(R.id.neo_home_energy_water_month, Statistics.TimeType.MONTH, Statistics.DataType.WATERED)
-        fill(R.id.neo_home_energy_water_year, Statistics.TimeType.YEAR, Statistics.DataType.WATERED)
-        fill(R.id.neo_home_energy_watered_day, Statistics.TimeType.DAY, Statistics.DataType.WATEREDCOUNT)
-        fill(R.id.neo_home_energy_watered_month, Statistics.TimeType.MONTH, Statistics.DataType.WATEREDCOUNT)
-        fill(R.id.neo_home_energy_watered_year, Statistics.TimeType.YEAR, Statistics.DataType.WATEREDCOUNT)
-        fill(R.id.neo_home_energy_watering_day, Statistics.TimeType.DAY, Statistics.DataType.WATERINGCOUNT)
-        fill(R.id.neo_home_energy_watering_month, Statistics.TimeType.MONTH, Statistics.DataType.WATERINGCOUNT)
-        fill(R.id.neo_home_energy_watering_year, Statistics.TimeType.YEAR, Statistics.DataType.WATERINGCOUNT)
+    }
+
+    /** 自动切号：直接读注入进程写的两个状态文件，不依赖 libxposed 类 */
+    private fun fillSwitchCard() {
+        try {
+            val settingsFile = java.io.File(FileUtil.MAIN_DIRECTORY_FILE, "account_switch_settings.json")
+            var enabled = false
+            var intervalSeconds = 0
+            if (settingsFile.isFile() && settingsFile.length() <= 16384) {
+                val jo = org.json.JSONObject(FileUtil.readFromFile(settingsFile))
+                enabled = jo.optBoolean("enabled", false)
+                intervalSeconds = jo.optInt("intervalSeconds", 0)
+            }
+            findViewById<TextView>(R.id.neo_home_switch_status).text = if (enabled) "已开启" else "未开启"
+            findViewById<TextView>(R.id.neo_home_switch_interval).text =
+                if (intervalSeconds > 0) "${intervalSeconds / 60} 分钟" else "—"
+
+            val statusFile = java.io.File(FileUtil.MAIN_DIRECTORY_FILE, "account_switch_status.json")
+            val now = System.currentTimeMillis()
+            val clock = java.text.SimpleDateFormat("HH:mm", java.util.Locale.ROOT)
+            var phaseText = "—"
+            var nextText = "—"
+            if (statusFile.isFile && statusFile.length() <= 512) {
+                val jo = org.json.JSONObject(FileUtil.readFromFile(statusFile))
+                val phase = jo.optString("phase", "")
+                val updatedAt = jo.optLong("updatedAt", 0L)
+                val fresh = now - updatedAt <= 90000L
+                phaseText = when {
+                    !enabled -> "未开启自动切号"
+                    phase.isEmpty() || !fresh -> "等待支付宝更新"
+                    else -> switchPhaseText(phase)
+                }
+                val nextAt = jo.optLong("nextAt", 0L)
+                nextText = when {
+                    !enabled -> "—"
+                    // 已经进倒计时：直接显示算出来的准确钟点
+                    nextAt > now && fresh -> clock.format(java.util.Date(nextAt))
+                    nextAt in 1..now && fresh -> "即将切换"
+                    // 还没进倒计时（等回首页 / 等本轮跑完）：也给出时间点，别再只写「等回到首页」
+                    intervalSeconds > 0 -> "预计 " + clock.format(java.util.Date(now + intervalSeconds * 1000L))
+                    else -> "—"
+                }
+            } else if (enabled && intervalSeconds > 0) {
+                nextText = "预计 " + clock.format(java.util.Date(now + intervalSeconds * 1000L))
+            }
+            findViewById<TextView>(R.id.neo_home_switch_phase).text = phaseText
+            findViewById<TextView>(R.id.neo_home_switch_next).text = nextText
+        } catch (th: Throwable) {
+            // 文件不存在或解析失败时保持占位
+        }
+    }
+
+    /** 把切号内部状态翻成大白话，别再显示 WAIT_HOME、「等待中」这种看不懂的字 */
+    private fun switchPhaseText(phase: String): String = when (phase) {
+        "WAIT_HOST" -> "等支付宝服务就绪"
+        "WAIT_IDENTITY" -> "等账号信息同步"
+        "WAIT_HISTORY" -> "等凑齐两个可切换账号"
+        "WAIT_HOME" -> "等回到支付宝首页（二级页面不切）"
+        "WAIT_CAPTCHA" -> "等验证码处理完"
+        "WAIT_TASKS" -> "等本轮任务跑完"
+        "WAIT_IDLE" -> "等本轮空闲"
+        "COUNTDOWN" -> "倒计时中，马上就切"
+        "ROUND_COOLDOWN" -> "刚切回首个账号，冷却中"
+        "SWITCHING" -> "正在切换账号"
+        "CONFIRMING" -> "正在确认切换结果"
+        "PAUSED" -> "切号暂停了，关掉再开可恢复"
+        "DISABLED" -> "已关闭"
+        else -> "倒计时中"
     }
 
     /** 注入状态广播：模块被 LSPosed 启用并注入支付宝后标记已激活；update 广播同步刷新统计。 */
@@ -495,13 +1100,13 @@ class NeoMainActivity : AppCompatActivity() {
                     } else {
                         ViewAppInfo.setRunTypeByCode(RunType.MODEL.getCode())
                     }
-                    // 配置跟随支付宝当前登录账号：仅主界面在前台时才同步 uid（覆盖本地旧值）。
-                    // 后台或停留在二级页（账号切换、配置编辑）时不改账号选择，防止配置页保存时把账号串写成另一账号
-                    if (code == RunType.MODEL.getCode() && resumed) {
-                        val uid = intent.getStringExtra("uid")
-                        if (!uid.isNullOrEmpty() && uid != restoreSelectedAccount()) {
+                    // 支付宝真正登录的账号（自动切号成功后会变）：记下来给首页状态行显示
+                    val uid = intent.getStringExtra("uid")
+                    if (!uid.isNullOrEmpty()) {
+                        hostUid = uid
+                        // 配置跟随登录账号：仅主界面在前台时才同步，防止配置页保存串写成另一账号
+                        if (code == RunType.MODEL.getCode() && resumed && uid != restoreSelectedAccount()) {
                             uiPrefs.edit().putString(KEY_LAST_SELECTED_USER, uid).apply()
-                            // 登录账号已更新：刷新设置页账号卡片（头像/账号名），无需进账号页即可看到
                             runOnUiThread { updateAccountSettingCard() }
                         }
                     }
@@ -511,7 +1116,13 @@ class NeoMainActivity : AppCompatActivity() {
                 }
 
                 "com.surexu.sesame.update" -> {
-                    runOnUiThread { bindEnergyStats() }
+                    val event = intent.getStringExtra("progressEvent")
+                    if (!event.isNullOrEmpty()) {
+                        // 进度以磁盘账本为准，广播只负责喊一声「快去读」，丢一条也不影响
+                        runOnUiThread { loadRunProgressForUi() }
+                    } else {
+                        runOnUiThread { bindEnergyStats() }
+                    }
                 }
             }
         }
@@ -526,20 +1137,222 @@ class NeoMainActivity : AppCompatActivity() {
         }
     }
 
-    /** 能量统计卡状态条：圆点 + 已激活/已加载/未加载 + 版本号，与模块版 EnergyStatsCard 一致。 */
+    /** 本轮清单里的一项：功能名 + 状态 */
+    private data class TaskItem(val name: String, val status: String)
+
+    /** idle / running / done / stopped / stalled */
+    private var runPhase = "idle"
+    /** 下一次执行的时间与方式，如 "17:53#定点" */
+    private var runNext = ""
+    private val runItems = mutableListOf<TaskItem>()
+
+    /** 读注入进程写的进度账本：整轮状态、本轮清单、每一项状态、下次执行时间 */
+    private fun loadRunProgressForUi() {
+        try {
+            val f = java.io.File(FileUtil.MAIN_DIRECTORY_FILE, "run_progress.json")
+            if (!f.isFile || f.length() > 65536) return
+            val jo = org.json.JSONObject(FileUtil.readFromFile(f))
+            val updatedAt = jo.optLong("updatedAt", 0L)
+            if (updatedAt < lastProgressResetAt) return
+            // 超过 3 分钟没有新事件，别让「正在执行」永远挂着
+            val stalled = System.currentTimeMillis() - updatedAt > 3 * 60 * 1000L
+            val phase = jo.optString("phase", "idle")
+            runPhase = if (stalled && phase == "running") "stalled" else phase
+            runNext = jo.optString("nextRun", "")
+            runItems.clear()
+            val arr = jo.optJSONArray("items")
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    val o = arr.optJSONObject(i) ?: continue
+                    val n = o.optString("name", "")
+                    if (n.isNotBlank()) runItems.add(TaskItem(n, o.optString("status", "")))
+                }
+            }
+            renderRunProgress()
+        } catch (th: Throwable) {
+        }
+    }
+
+    /** 参考图里的粉彩小色块：圆角底 + 对应深色字 */
+    private fun pastelText(text: String, bgRes: Int, fgRes: Int, radiusDp: Int = 10): TextView {
+        return TextView(this).apply {
+            this.text = text
+            textSize = 10f
+            setTextColor(colorOf(fgRes))
+            val d = android.graphics.drawable.GradientDrawable()
+            d.cornerRadius = dp(radiusDp).toFloat()
+            d.setColor(colorOf(bgRes))
+            background = d
+            setPadding(dp(9), dp(4), dp(9), dp(4))
+        }
+    }
+
+    /** 首页进度：状态药丸 + 一根总进度条 + 当前项 + 本轮清单 */
+    private fun renderRunProgress() {
+        if (!pageInited[0]) return
+        val box = findViewById<LinearLayout>(R.id.neo_home_progress_container) ?: return
+        box.removeAllViews()
+        val total = runItems.size
+        val done = runItems.count { it.status == "完成" || it.status == "跳过" }
+        val (label, chipBg, chipFg) = when (runPhase) {
+            "running" -> Triple("正在执行", R.color.neo_pastel_purple, R.color.neo_pastel_purple_text)
+            "done" -> Triple("本轮已完成", R.color.neo_pastel_mint, R.color.neo_pastel_mint_text)
+            "stopped" -> Triple("已停止", R.color.neo_pastel_rose, R.color.neo_pastel_rose_text)
+            "stalled" -> Triple("可能已中断", R.color.neo_pastel_amber, R.color.neo_pastel_amber_text)
+            else -> Triple("空闲", R.color.neo_pressed, R.color.neo_text_secondary)
+        }
+        findViewById<TextView>(R.id.neo_home_progress_title)?.text = "执行进度"
+
+        // 状态药丸 + 完成数，一行看清「在不在跑、跑到第几个」
+        val statusLine = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+        }
+        statusLine.addView(pastelText(label, chipBg, chipFg, 100))
+        statusLine.addView(TextView(this).apply {
+            text = if (total > 0) "  $done / $total 项" else ""
+            textSize = 12f
+            typeface = android.graphics.Typeface.DEFAULT_BOLD
+            setTextColor(colorOf(R.color.neo_text_primary))
+        })
+        box.addView(statusLine)
+
+        val running = runItems.firstOrNull { it.status == "进行中" }?.name.orEmpty()
+        val summary = if (runPhase == "running" && running.isNotBlank()) {
+            "当前正在跑：$running"
+        } else {
+            when (runPhase) {
+                "done" -> "本轮跑完 $total 项"
+                "stopped" -> "已手动停止"
+                "stalled" -> "超过 3 分钟没有新进展，可在日志里确认"
+                else -> "现在没有任务在跑"
+            }
+        }
+        box.addView(TextView(this).apply {
+            text = summary
+            textSize = 11f
+            setTextColor(colorOf(R.color.neo_text_secondary))
+            setPadding(0, dp(5), 0, dp(2))
+        })
+
+        // 单根总进度条
+        val pct = if (total <= 0) 0 else (done * 100 / total).coerceIn(0, 100)
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundResource(R.drawable.neo_home_track)
+        }
+        val fillWeight = pct.coerceAtLeast(1).toFloat() / 100f
+        bar.addView(View(this).apply { setBackgroundResource(R.drawable.neo_home_track_fill) },
+            LinearLayout.LayoutParams(0, dp(8), fillWeight))
+        bar.addView(View(this), LinearLayout.LayoutParams(0, dp(8), 1f - fillWeight))
+        box.addView(bar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(8)).apply {
+            topMargin = dp(6)
+            bottomMargin = dp(6)
+        })
+
+        if (runNext.isNotBlank()) {
+            val parts = runNext.split("#")
+            box.addView(
+                pastelText(
+                    "下一次执行 ${parts.getOrNull(0).orEmpty()}（${parts.getOrNull(1).orEmpty()}）",
+                    R.color.neo_pastel_blue, R.color.neo_pastel_blue_text
+                ),
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = dp(2) }
+            )
+        }
+
+        if (total > 0) {
+            box.addView(TextView(this).apply {
+                text = "本轮项目"
+                textSize = 10f
+                typeface = android.graphics.Typeface.DEFAULT_BOLD
+                setTextColor(colorOf(R.color.neo_text_secondary))
+                setPadding(0, dp(4), 0, dp(2))
+            })
+            val limit = 24
+            for (item in runItems.take(limit)) {
+                box.addView(TextView(this).apply {
+                    text = when (item.status) {
+                        "进行中" -> "▶ ${item.name}"
+                        "完成" -> "✓ ${item.name}"
+                        "跳过" -> "— ${item.name}（条件没到）"
+                        "已停止" -> "■ ${item.name}（已停止）"
+                        else -> "○ ${item.name}"
+                    }
+                    textSize = 10f
+                    setTextColor(colorOf(if (item.status == "进行中") R.color.neo_pastel_purple_text else R.color.neo_text_hint))
+                    isSingleLine = true
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    setPadding(dp(8), dp(3), dp(8), dp(3))
+                    // 正在跑的那一项用淡紫块标出来，对应参考图里的粉彩内容卡
+                    if (item.status == "进行中") {
+                        val d = android.graphics.drawable.GradientDrawable()
+                        d.cornerRadius = dp(8).toFloat()
+                        d.setColor(colorOf(R.color.neo_pastel_purple))
+                        background = d
+                    }
+                })
+            }
+            if (total > limit) {
+                box.addView(TextView(this).apply {
+                    text = "…还有 ${total - limit} 项"
+                    textSize = 10f
+                    setTextColor(colorOf(R.color.neo_text_hint))
+                    setPadding(dp(4), dp(1), 0, 0)
+                })
+            }
+        }
+    }
+
+    /** 四个分区都能折叠：标题统一带底色，收起后只看得到标题，不会再混淆成另一块 */
+    private fun bindHomeToggles() {
+        bindOneToggle(R.id.neo_home_progress_container, R.id.neo_home_progress_toggle)
+        bindOneToggle(R.id.neo_home_feature_container, R.id.neo_home_feature_toggle)
+        bindOneToggle(R.id.neo_home_more_container, R.id.neo_home_more_toggle)
+        bindOneToggle(R.id.neo_home_switch_container, R.id.neo_home_switch_toggle)
+    }
+
+    private fun bindOneToggle(boxId: Int, toggleId: Int) {
+        val box = findViewById<LinearLayout>(boxId) ?: return
+        val toggle = findViewById<TextView>(toggleId) ?: return
+        toggle.setOnClickListener {
+            val show = box.visibility != View.VISIBLE
+            box.visibility = if (show) View.VISIBLE else View.GONE
+            toggle.text = if (show) "收起 ▲" else "展开 ▼"
+        }
+    }
+
+    /** 首页状态行：圆点 + 已激活/已加载/未加载 + 版本号 + 当前账号 */
     private fun updateEnergyStatus() {
-        val dot = findViewById<View>(R.id.neo_home_energy_status_dot)
-        val text = findViewById<TextView>(R.id.neo_home_energy_status_text)
-        val version = findViewById<TextView>(R.id.neo_home_energy_status_version)
+        val dot = findViewById<View>(R.id.neo_home_status_dot) ?: return
+        val text = findViewById<TextView>(R.id.neo_home_status_text)
+        val version = findViewById<TextView>(R.id.neo_home_status_version)
+        val account = findViewById<TextView>(R.id.neo_home_status_account)
         val (color, label) = when (ViewAppInfo.getRunType()) {
-            RunType.MODEL -> "#4CAF50" to "已激活"
+            RunType.MODEL -> "#4CAF50" to "运行中"
             RunType.PACKAGE -> "#4CAF50" to "已加载"
             RunType.DISABLE -> "#E0532C" to "未加载"
         }
         dot.backgroundTintList = ColorStateList.valueOf(android.graphics.Color.parseColor(color))
         text.text = label
         val versionName = ViewAppInfo.getAppVersion()
-        version.text = if (versionName.isNullOrBlank()) "" else "· v$versionName"
+        version.text = if (versionName.isNullOrBlank()) "" else "v$versionName"
+        try {
+            // 优先显示支付宝回包里的真实登录账号，切号后才看得出界面跟着换了
+            val uid = if (hostUid.isNotEmpty()) hostUid
+                      else com.surexu.sesame.util.idMap.UserIdMap.getCurrentUid()
+            val name = if (uid.isNullOrEmpty()) "" else com.surexu.sesame.util.idMap.UserIdMap.getMaskName(uid)
+            account.text = when {
+                !name.isNullOrEmpty() -> "账号 $name"
+                uid != null && uid.length > 4 -> "账号 ${uid.takeLast(4)}"
+                else -> ""
+            }
+        } catch (th: Throwable) {
+            account.text = ""
+        }
     }
 
     private val hitokotoList = listOf(
@@ -596,6 +1409,8 @@ class NeoMainActivity : AppCompatActivity() {
                         }
                         if (sentence.isNotBlank()) {
                             runOnUiThread {
+                                // 页面已经关掉时别再碰控件，避免网络异步回包导致崩溃 / 泄漏
+                                if (isFinishing || isDestroyed) return@runOnUiThread
                                 text.text = if (suffix.isNotBlank()) "$sentence $suffix" else sentence
                             }
                         }
@@ -612,7 +1427,7 @@ class NeoMainActivity : AppCompatActivity() {
     }
 
     private fun bindLogsActions() {
-        // 日志分类标签：森林/庄园/其他/记录/错误/调试/运行，按「系统界面-日志展示」勾选过滤
+        // 日志分类标签：森林/庄园/新村/运动/其他/记录/错误/调试/运行，按「系统界面-日志展示」勾选过滤
         val tabBar = findViewById<LinearLayout>(R.id.neo_logs_tab_bar)
         val enabledTabs = uiPrefs.getStringSet(NeoSystemActivity.KEY_UI_LOG_TABS, null) ?: logTabs.toSet()
         val visibleTabs = logTabs.filter { enabledTabs.contains(it) }
@@ -625,6 +1440,36 @@ class NeoMainActivity : AppCompatActivity() {
         if (currentLogTag !in visibleTabs) {
             currentLogTag = visibleTabs.first()
         }
+        // 「其他」日志专用：按子功能下拉筛选；其它分类把这个下拉框藏起来
+        val spinner = findViewById<Spinner>(R.id.neo_logs_module_spinner)
+        val subFeatures = mutableListOf("全部子功能")
+        subFeatures.addAll(listOf("游戏中心", "消费金", "百次立减", "花呗金",
+                "内容种草滑动红包", "会员", "金豆", "种花大作战", "新村", "运动", "古树", "保护地"))
+        try {
+            FeatureStats.allFeatureNames().forEach {
+                if (!subFeatures.contains(it)) subFeatures.add(it)
+            }
+        } catch (th: Throwable) {
+        }
+        spinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, subFeatures).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        spinner.setSelection(subFeatures.indexOf(selectedLogSubFeature).coerceAtLeast(0))
+        spinner.onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(
+                parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long
+            ) {
+                selectedLogSubFeature = subFeatures.getOrElse(position) { "全部子功能" }
+                renderLogEntries()
+            }
+
+            override fun onNothingSelected(parent: android.widget.AdapterView<*>?) {}
+        }
+        fun syncSpinnerVisibility() {
+            spinner.visibility = if (currentLogTag == "其他") View.VISIBLE else View.GONE
+        }
+        syncSpinnerVisibility()
+
         val tabs = mutableListOf<TextView>()
         visibleTabs.forEachIndexed { index, name ->
             val tab = layoutInflater.inflate(R.layout.neo_item_log_tab, tabBar, false) as TextView
@@ -640,6 +1485,7 @@ class NeoMainActivity : AppCompatActivity() {
                 tab.isSelected = true
                 updateLogTabStyle(tab)
                 currentLogTag = name
+                syncSpinnerVisibility()
                 hideLogSearchBar()
                 asyncLoadLogEntries(name, true)
             }
@@ -724,7 +1570,7 @@ class NeoMainActivity : AppCompatActivity() {
         }
     }
 
-    private val logTabs = listOf("森林", "庄园", "其他", "记录", "错误", "调试", "运行")
+    private val logTabs = listOf("森林", "庄园", "新村", "运动", "其他", "记录", "错误", "调试", "运行")
 
     /** 日志页是否已完成首次加载：切到日志页时才读盘解析，避免启动即读 1MB 日志 */
     private var logsLoaded = false
@@ -734,6 +1580,9 @@ class NeoMainActivity : AppCompatActivity() {
     private data class NeoLogEntry(val lineNumber: Int, val time: String?, val tag: String?, val body: String)
 
     private var currentLogTag: String = "森林"
+
+    /** 「其他」日志里当前选中的子功能；"全部子功能" 表示不过滤 */
+    private var selectedLogSubFeature: String = "全部子功能"
 
     /** 通俗视图开关（默认开）：Hook/接口等技术日志折叠，只留人话 */
     private var logHumanMode: Boolean = true
@@ -777,10 +1626,12 @@ class NeoMainActivity : AppCompatActivity() {
 
     private data class LogFileStamp(val length: Long, val modified: Long)
 
-    /** 分类标签 → 对应日志文件。'记录' 对应金豆记录（模块版 GOLDENBEANS）。 */
+    /** 分类标签 → 对应日志文件。新村 / 运动各自独立文件，'记录' 对应金豆记录。 */
     private fun logFileFor(tag: String): File = when (tag) {
         "森林" -> FileUtil.getForestLogFile()
         "庄园" -> FileUtil.getFarmLogFile()
+        "新村" -> FileUtil.getVillageLogFile()
+        "运动" -> FileUtil.getSportsLogFile()
         "其他" -> FileUtil.getOtherLogFile()
         "记录" -> FileUtil.getGoldenBeansLogFile()
         "错误" -> FileUtil.getErrorLogFile()
@@ -886,10 +1737,13 @@ class NeoMainActivity : AppCompatActivity() {
             techBar.visibility = View.GONE
         }
         // 过滤在数据量最大 500 条内进行，纯内存操作很快；真正的卡顿源是 inflate/布局，已用复用解决
+        // 「其他」日志按选中的子功能名过滤：各模块日志正文里都带自己的功能名
+        val subFilter = if (currentLogTag == "其他") selectedLogSubFeature else "全部子功能"
         val filtered = shownEntries.filter { e ->
-            query.isEmpty() ||
+            val matchSub = subFilter == "全部子功能" || e.body.contains(subFilter, ignoreCase = true)
+            matchSub && (query.isEmpty() ||
                 (e.tag?.contains(query, ignoreCase = true) == true) ||
-                e.body.contains(query, ignoreCase = true)
+                e.body.contains(query, ignoreCase = true))
         }
         if (filtered.isEmpty()) {
             list.removeAllViews()

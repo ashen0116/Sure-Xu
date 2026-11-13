@@ -262,6 +262,9 @@ public class ConfigV2 {
             }
         }
 
+        // 版本升级可能新增模型：按当前代码的模型清单重建一遍，让老配置里没有的新模型
+        // 以默认值补进来。否则新模型既不在配置里、也不会被启动（表现为"加了功能却没反应"）。
+        INSTANCE.setModelFieldsMap(new java.util.HashMap<>(INSTANCE.getModelFieldsMap()));
         clampAllFields();
         INSTANCE.setInit(true);
         captureBaseline();

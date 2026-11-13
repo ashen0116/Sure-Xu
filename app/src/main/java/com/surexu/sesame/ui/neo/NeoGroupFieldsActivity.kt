@@ -102,6 +102,12 @@ class NeoGroupFieldsActivity : AppCompatActivity() {
             rebuildRows()
         }
 
+        val scroll = findViewById<ScrollView>(R.id.neo_group_scroll)
+        scroll.setOnScrollChangeListener { _, _, _, _, _ -> updateSticky() }
+        findViewById<View>(R.id.neo_group_sticky).setOnClickListener {
+            stickyRef?.let { collapseCard(it) }
+        }
+
         buildRows()
     }
 
@@ -152,6 +158,7 @@ class NeoGroupFieldsActivity : AppCompatActivity() {
         if (prevY > 0) {
             scroll.post { scroll.scrollTo(0, prevY) }
         }
+        scroll.post { updateSticky() }
     }
 
     private val rebuildHandler = Handler(Looper.getMainLooper())
@@ -181,6 +188,8 @@ class NeoGroupFieldsActivity : AppCompatActivity() {
         val marginPx = dp(12)
         val topPx = dp(14)
         val query = currentQuery.trim()
+        cardRefs.clear()
+        chevByCode.clear()
 
         // 会员组并入"其他"页：会员排第一，动物竞猜等 OTHER 项紧随其后
         // 农场组并入"庄园"页：庄园配置后追加农场配置
@@ -216,9 +225,11 @@ class NeoGroupFieldsActivity : AppCompatActivity() {
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 ).apply { setMargins(0, 0, 0, marginPx) }
             }
-            card.addView(buildModelHeader(mc, visibleFields, body))
+            val header = buildModelHeader(mc, visibleFields, body)
+            card.addView(header)
             card.addView(body)
             container.addView(card)
+            cardRefs.add(CardRef(mc.code, mc.name, card, header, body))
 
             var lastSection: String? = null
             var firstRow = true
@@ -229,11 +240,15 @@ class NeoGroupFieldsActivity : AppCompatActivity() {
                 } else {
                     null
                 }
-                if (section != null && section != lastSection) {
-                    body.addView(buildSectionTitle(section))
-                    firstRow = true
+                // 不带「|」前缀的字段（例如「一键施肥5次」）不能把小节名抹掉：
+                // 否则后面再来一个「农场施肥 | xxx」会又插一次同名标题，看起来像两张卡
+                if (section != null) {
+                    if (section != lastSection) {
+                        body.addView(buildSectionTitle(section))
+                        firstRow = true
+                    }
+                    lastSection = section
                 }
-                lastSection = section
                 if (!firstRow) body.addView(buildRowDivider())
                 firstRow = false
                 body.addView(buildFieldRow(mc, field, 0, rg))
@@ -713,8 +728,56 @@ class NeoGroupFieldsActivity : AppCompatActivity() {
     /** 只认这三个已知时间字段，避免误伤其它 LIST（好友名单、城市码等） */
     private val timeFieldCodes = setOf("execAtTimeList", "wakenAtTimeList", "energyTime")
 
+    /** 合法时间点：HHMM 或 HHMMSS */
+    private val TIME_POINT_RE = Regex("^\\d{4}(\\d{2})?$")
+
     /** 折叠状态按模型编码记忆；未记录即折叠（需求：全部默认折叠） */
     private val expandedModels = mutableMapOf<String, Boolean>()
+
+    /** 一张模型折叠卡的引用，供滚动时判断当前停在哪张卡上（吸顶条用） */
+    private class CardRef(
+        val code: String,
+        val name: String,
+        val card: View,
+        val header: View,
+        val body: LinearLayout
+    )
+
+    private val cardRefs = mutableListOf<CardRef>()
+    private val chevByCode = mutableMapOf<String, TextView>()
+    private var stickyRef: CardRef? = null
+
+    /** 滚动时刷新吸顶条：卡片头滚出视野后浮出「模型名 + 收起」，随时可收 */
+    private fun updateSticky() {
+        val bar = findViewById<View>(R.id.neo_group_sticky) ?: return
+        val scroll = findViewById<ScrollView>(R.id.neo_group_scroll) ?: return
+        val y = scroll.scrollY
+        var current: CardRef? = null
+        for (ref in cardRefs) {
+            if (ref.body.visibility != View.VISIBLE) continue
+            if (ref.card.top - y > 0) break
+            current = ref
+        }
+        val ref = current
+        if (ref == null || ref.card.top + ref.header.height - y > 0) {
+            stickyRef = null
+            bar.visibility = View.GONE
+            return
+        }
+        stickyRef = ref
+        bar.findViewById<TextView>(R.id.neo_group_sticky_name).text = ref.name
+        bar.visibility = View.VISIBLE
+    }
+
+    /** 收起某张卡并把它滚回顶部，保证卡片头重新可见 */
+    private fun collapseCard(ref: CardRef) {
+        ref.body.visibility = View.GONE
+        chevByCode[ref.code]?.text = "▸"
+        expandedModels[ref.code] = false
+        findViewById<ScrollView>(R.id.neo_group_scroll).smoothScrollTo(0, ref.card.top)
+        findViewById<View>(R.id.neo_group_sticky).visibility = View.GONE
+        stickyRef = null
+    }
 
     private fun detectTimeKind(field: ModelField<*>): TimeFieldKind {
         if (field.code !in timeFieldCodes) {
@@ -732,7 +795,14 @@ class NeoGroupFieldsActivity : AppCompatActivity() {
         return h.coerceIn(0, 23) to m.coerceIn(0, 59)
     }
 
+    /** 合法时间点：HHMM 或 HHMMSS；历史遗留的 "24" 之类标记不算 */
+    private fun isTimePointText(raw: String): Boolean = TIME_POINT_RE.matches(raw.trim())
+
     private fun formatPoint(raw: String): String {
+        // 非时间点（历史配置里可能混着 "24" 这类标记）原样返回，不能硬转成 23:00
+        if (!isTimePointText(raw)) {
+            return raw.trim()
+        }
         val (h, m) = parsePoint(raw)
         return two(h) + ":" + two(m)
     }
@@ -750,11 +820,12 @@ class NeoGroupFieldsActivity : AppCompatActivity() {
         if (items.isEmpty()) {
             return "已关闭"
         }
-        return if (kind == TimeFieldKind.RANGE) {
-            items.joinToString("、") { formatRange(it) }
-        } else {
-            items.joinToString("、") { formatPoint(it) }
+        if (kind == TimeFieldKind.RANGE) {
+            val ranges = items.filter { it.contains("-") }
+            return if (ranges.isEmpty()) "已关闭" else ranges.joinToString("、") { formatRange(it) }
         }
+        val points = items.filter { isTimePointText(it) }
+        return if (points.isEmpty()) "已关闭" else points.joinToString("、") { formatPoint(it) }
     }
 
     /** 模型卡头部：状态点 + 名称 + 已开/总数 + 折叠箭头，点一下切换 */
@@ -797,11 +868,13 @@ class NeoGroupFieldsActivity : AppCompatActivity() {
             setTextColor(ContextCompat.getColor(this@NeoGroupFieldsActivity, R.color.neo_text_hint))
         }
         header.addView(chev)
+        chevByCode[mc.code] = chev
         header.setOnClickListener {
             val expand = body.visibility != View.VISIBLE
             body.visibility = if (expand) View.VISIBLE else View.GONE
             chev.text = if (expand) "▾" else "▸"
             expandedModels[mc.code] = expand
+            findViewById<View>(R.id.neo_group_scroll).post { updateSticky() }
         }
         return header
     }
@@ -980,7 +1053,9 @@ class NeoGroupFieldsActivity : AppCompatActivity() {
         val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
         var enabled = !current.contains("-1")
-        val points = current.filter { it != "-1" }.map { parsePoint(it) }.toMutableList()
+        // 历史配置里可能混有非时间标记（如 "24"）：原样保留，不参与滚轮编辑
+        val extras = current.filter { it != "-1" && !isTimePointText(it) }.toMutableList()
+        val points = current.filter { isTimePointText(it) }.map { parsePoint(it) }.toMutableList()
         if (points.isEmpty()) {
             points.add(6 to 55)
             points.add(23 to 59)
@@ -1072,7 +1147,7 @@ class NeoGroupFieldsActivity : AppCompatActivity() {
 
         dialog.findViewById<TextView>(R.id.neo_edit_cancel).setOnClickListener { dialog.dismiss() }
         dialog.findViewById<TextView>(R.id.neo_edit_ok).setOnClickListener {
-            val out = if (enabled) points.map { two(it.first) + two(it.second) } else listOf("-1")
+            val out = if (enabled) points.map { two(it.first) + two(it.second) } + extras else listOf("-1")
             onOk(out)
             dialog.dismiss()
         }

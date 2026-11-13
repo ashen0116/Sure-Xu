@@ -43,7 +43,7 @@ class NeoSystemActivity : AppCompatActivity() {
         const val THEME_LIGHT = "light"
         const val THEME_DARK = "dark"
 
-        val LOG_CATEGORIES = listOf("森林", "庄园", "其他", "记录", "错误", "调试", "运行")
+        val LOG_CATEGORIES = listOf("森林", "庄园", "新村", "运动", "其他", "记录", "错误", "调试", "运行")
 
         private const val PREFS_UI = "sesame_ui_state"
     }

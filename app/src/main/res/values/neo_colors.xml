@@ -1,73 +1,81 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- ============ 原创拟态（Neo Neumorphism）色板 ============
-         与旧版纯白拟态区分：霜白基色 + 深雾蓝灰阴影 + 霓虹青主色。
-         层次完全由双向光照（左上高光 / 右下阴影）塑造。 -->
+    <!-- ============ 扁平卡片风格（对齐 Watermelon 参考图） ============
+         参考图特征：几乎不用描边，靠「淡青绿底 + 纯白卡片」分层；
+         内容用粉彩色块区分；强调是近黑药丸；大量留白。
+         所有 color name 保持原样，只换取值 / 追加粉彩色，避免改动引用处。 -->
 
-    <!-- 基色 / 光照 -->
-    <color name="neo_base">#F6F9FE</color>
-    <color name="neo_card">#FDFEFF</color>
-    <color name="neo_card_edge">#D7E2F2</color>
-    <color name="neo_highlight">#FFFFFF</color>
-    <color name="neo_bubble_ai">#E9EEF7</color>
+    <!-- 页面底 / 卡片 / 极淡边框 -->
+    <color name="neo_base">#F3F6F5</color>
+    <color name="neo_card">#FFFFFF</color>
+    <color name="neo_card_edge">#E8EFEC</color>
+    <color name="neo_highlight">#F7FAF9</color>
+    <color name="neo_bubble_ai">#E9F2EE</color>
 
-    <!-- 阴影（冷雾蓝灰） -->
-    <color name="neo_shadow">#8398BD</color>
-    <color name="neo_shadow_deep">#6E84AC</color>
+    <!-- 阴影占位：扁平风格不做凸起，留中性浅色供少数层叠 drawable 使用 -->
+    <color name="neo_shadow">#E8EFEC</color>
+    <color name="neo_shadow_deep">#DCE7E2</color>
 
-    <!-- 凹陷面 -->
-    <color name="neo_pressed">#EEF3FB</color>
-    <color name="neo_pressed_edge">#D7E2F2</color>
+    <!-- 次级面 / 选中面：淡青绿，对应参考图左侧栏 -->
+    <color name="neo_pressed">#E9F2EE</color>
+    <color name="neo_pressed_edge">#E8EFEC</color>
 
-    <!-- 主色：对齐截图蓝色系 -->
-    <color name="neo_primary">#2E6BFF</color>
-    <color name="neo_primary_deep">#1B5BF0</color>
-    <color name="neo_primary_soft">#E3ECFF</color>
+    <!-- 主色：沉稳蓝（进度 / 数据） -->
+    <color name="neo_primary">#2563EB</color>
+    <color name="neo_primary_deep">#1D4ED8</color>
+    <color name="neo_primary_soft">#EFF6FF</color>
 
-    <!-- 辅色：电光紫 -->
-    <color name="neo_secondary">#7C6CFF</color>
-    <color name="neo_secondary_soft">#ECE9FF</color>
+    <!-- 辅色 -->
+    <color name="neo_secondary">#6366F1</color>
+    <color name="neo_secondary_soft">#EEF2FF</color>
 
-    <!-- 强调：琥珀橙 -->
-    <color name="neo_accent">#FFB454</color>
-    <color name="neo_accent_soft">#FFF3E0</color>
+    <!-- 强调 -->
+    <color name="neo_accent">#F59E0B</color>
+    <color name="neo_accent_soft">#FFFBEB</color>
 
-    <!-- 文字 -->
-    <color name="neo_text_primary">#12202E</color>
-    <color name="neo_text_secondary">#54657D</color>
-    <color name="neo_text_hint">#8CA0B8</color>
+    <!-- 文字层级 -->
+    <color name="neo_text_primary">#0F172A</color>
+    <color name="neo_text_secondary">#475569</color>
+    <color name="neo_text_hint">#94A3B8</color>
     <color name="neo_on_primary">#FFFFFF</color>
 
-    <!-- 危险 -->
-    <color name="neo_error">#E5484D</color>
+    <color name="neo_error">#DC2626</color>
+    <color name="neo_blue">#2563EB</color>
 
-    <!-- 蓝色强调：能量统计列标题 / 底部导航选中态 -->
-    <color name="neo_blue">#2E6BFF</color>
+    <!-- 底栏：纯白卡片 + 极淡边 -->
+    <color name="neo_nav_float_bg">#FFFFFFFF</color>
+    <color name="neo_nav_float_edge">#E8EFEC</color>
+    <color name="neo_nav_item_selected">#E9F2EE</color>
+    <color name="neo_nav_item_selected_edge">#DCE7E2</color>
 
-    <!-- 悬浮胶囊底栏：半透明白毛玻璃 + 淡蓝描边 -->
-    <color name="neo_nav_float_bg">#F2FFFFFF</color>
-    <color name="neo_nav_float_edge">#C9D8F5</color>
+    <!-- 光影：扁平风格基本不用，留极淡值防止旧 drawable 出现硬边 -->
+    <color name="neo_shadow_soft">#080F172A</color>
+    <color name="neo_shadow_outer">#040F172A</color>
+    <color name="neo_highlight_soft">#00FFFFFF</color>
 
-    <!-- 导航选中项高亮块：半透明白 + 淡蓝描边 -->
-    <color name="neo_nav_item_selected">#B3FFFFFF</color>
-    <color name="neo_nav_item_selected_edge">#99C6E8FF</color>
+    <!-- 粉彩内容块：对应参考图里淡紫 / 淡蓝 / 淡黄 / 淡绿课程卡 -->
+    <color name="neo_pastel_purple">#EEE9FB</color>
+    <color name="neo_pastel_purple_text">#5B4BB7</color>
+    <color name="neo_pastel_blue">#E5F0FC</color>
+    <color name="neo_pastel_blue_text">#2563A8</color>
+    <color name="neo_pastel_amber">#FBF1D9</color>
+    <color name="neo_pastel_amber_text">#9A6B12</color>
+    <color name="neo_pastel_mint">#E3F3E9</color>
+    <color name="neo_pastel_mint_text">#2F7A55</color>
+    <color name="neo_pastel_rose">#FCE9EA</color>
+    <color name="neo_pastel_rose_text">#B3404A</color>
 
-    <!-- 拟态光影：凸起卡片右下软影 / 左上高光 -->
-    <color name="neo_shadow_soft">#3C8398BD</color>
-    <color name="neo_shadow_outer">#148398BD</color>
-    <color name="neo_highlight_soft">#59FFFFFF</color>
-
-    <!-- 功能页分类图标渐变（统一对齐蓝色系，深浅区分分类） -->
-    <color name="neo_feat_base_start">#2E6BFF</color>
-    <color name="neo_feat_base_end">#1B5BF0</color>
-    <color name="neo_feat_forest_start">#34CFE4</color>
-    <color name="neo_feat_forest_end">#0EA8CE</color>
-    <color name="neo_feat_farm_start">#5B7BFF</color>
-    <color name="neo_feat_farm_end">#3858EE</color>
-    <color name="neo_feat_village_start">#5AC8FA</color>
-    <color name="neo_feat_village_end">#2E9EF4</color>
-    <color name="neo_feat_sport_start">#7A8CFF</color>
-    <color name="neo_feat_sport_end">#5766F0</color>
-    <color name="neo_feat_other_start">#9AA9C0</color>
-    <color name="neo_feat_other_end">#74849E</color>
+    <!-- 功能页分类图标渐变 -->
+    <color name="neo_feat_base_start">#3B82F6</color>
+    <color name="neo_feat_base_end">#2563EB</color>
+    <color name="neo_feat_forest_start">#0EA5E9</color>
+    <color name="neo_feat_forest_end">#0284C7</color>
+    <color name="neo_feat_farm_start">#6366F1</color>
+    <color name="neo_feat_farm_end">#4F46E5</color>
+    <color name="neo_feat_village_start">#38BDF8</color>
+    <color name="neo_feat_village_end">#0EA5E9</color>
+    <color name="neo_feat_sport_start">#818CF8</color>
+    <color name="neo_feat_sport_end">#6366F1</color>
+    <color name="neo_feat_other_start">#94A3B8</color>
+    <color name="neo_feat_other_end">#64748B</color>
 </resources>

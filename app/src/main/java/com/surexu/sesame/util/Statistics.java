@@ -39,7 +39,8 @@ public class Statistics {
     /**
      * 用服务端权威值**覆盖**今日收取能量（而非累加）。
      * <p>逐点 {@link #addData} 只要漏掉一个入口，当日账目就永久偏小，故改由服务端明细直接定值。
-     * <p>month/year 按差值同步追加：这两个是历史累计维度，被覆盖的今日值此前已计入它们。
+     * <p>month/year/all 按差值同步追加：月、年、累计都是「历史累计维度」，
+     * 被覆盖的今日值此前已计入它们，换天/换月/换年清理时它们不会被清零。
      *
      * @param todayCollected 服务端给出的今日收取能量；传负数表示无效值、忽略
      * @return 本次覆盖造成的日维度增量（可能为负）
@@ -55,6 +56,9 @@ public class Statistics {
         INSTANCE.day.collected = todayCollected;
         INSTANCE.month.collected += delta;
         INSTANCE.year.collected += delta;
+        // 累计是所有日子的总和，只做加法、永不清零；这里必须跟着补差值，
+        // 否则「今日 3 千多、累计 1 千多」就是漏加造成的
+        INSTANCE.all.collected += delta;
         return delta;
     }
 
@@ -119,6 +123,8 @@ public class Statistics {
                 break;
         }
         if (ts != null) {
+            // 累计就是账本里那一栏，老老实实读出来；不再靠「取四档最大值」临时糊弄界面。
+            // 老账本缺的差额在加载时一次性补回（见 repairAllLedgerOnce），之后只靠逐笔累加。
             switch (dt) {
                 case TIME:
                     data = ts.time;
@@ -202,6 +208,8 @@ public class Statistics {
                 Log.printStackTrace(TAG, e);
             }
         }
+        // 放在格式化回写判断之后：修旧账只改内存，不干扰「文件是否只是格式不同」的判断
+        repairAllLedgerOnce();
         return INSTANCE;
     }
     
@@ -212,6 +220,29 @@ public class Statistics {
         catch (JsonMappingException e) {
             Log.printStackTrace(TAG, e);
         }
+    }
+
+    /**
+     * 界面进程专用：只读地把「当前账号」的统计文件读进内存，不回写磁盘。
+     * <p>原来界面也走 {@link #load()}，既会跟注入进程抢着写同一个文件，又只在首次读一次，
+     * 导致日志里数字涨了、首页还是老数字；切号后更是把两个号的数据混在一起。
+     * 每次先清空再读，界面永远等于磁盘上当前账号的最新快照。
+     */
+    public static synchronized void loadForUi() {
+        unload();
+        try {
+            File f = FileUtil.getStatisticsFile();
+            if (f.isFile()) {
+                String json = FileUtil.readFromFile(f);
+                if (json != null && !json.isEmpty()) {
+                    JsonUtil.copyMapper().readerForUpdating(INSTANCE).readValue(json);
+                }
+            }
+        } catch (Throwable t) {
+            Log.printStackTrace(TAG, t);
+        }
+        // 界面只读，不回写磁盘；但旧账本也要按同一套修一下，避免界面短暂显示偏小的累计
+        repairAllLedgerOnce();
     }
     
     public static synchronized void save() {
@@ -227,6 +258,32 @@ public class Statistics {
             Log.debug(TAG + ", 保存 statistics.json");
         }
         FileUtil.write2File(JsonUtil.toFormatJsonString(INSTANCE), FileUtil.getStatisticsFile());
+    }
+
+    /**
+     * 只修一次旧账：老版本校准今日明细时漏给累计加差值，导致 all 比今日还小。
+     * 加载时把这段差额补回去，之后累计完全靠逐笔加法，日/月/年换期清理时绝不碰它。
+     * <p>这不是「显示时取最大值」——是直接把账本改正，界面读到多少就是多少。
+     */
+    private static void repairAllLedgerOnce() {
+        TimeStatistics a = INSTANCE.all;
+        a.collected = maxOf(a.collected, INSTANCE.year.collected, INSTANCE.month.collected, INSTANCE.day.collected);
+        a.helped = maxOf(a.helped, INSTANCE.year.helped, INSTANCE.month.helped, INSTANCE.day.helped);
+        a.watered = maxOf(a.watered, INSTANCE.year.watered, INSTANCE.month.watered, INSTANCE.day.watered);
+        a.wateredcount = maxOf(a.wateredcount, INSTANCE.year.wateredcount,
+                INSTANCE.month.wateredcount, INSTANCE.day.wateredcount);
+        a.wateringcount = maxOf(a.wateringcount, INSTANCE.year.wateringcount,
+                INSTANCE.month.wateringcount, INSTANCE.day.wateringcount);
+    }
+
+    private static int maxOf(int... values) {
+        int max = values[0];
+        for (int i = 1; i < values.length; i++) {
+            if (values[i] > max) {
+                max = values[i];
+            }
+        }
+        return max;
     }
     
     public static Boolean updateDay(Calendar nowCalendar) {

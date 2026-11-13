@@ -486,6 +486,10 @@ public class FileUtil {
     public static File getVitalityBenefitIdMap(String userId) {
         return getFile(getUserDataDirectoryFile(userId), "vitalityBenefit.json");
     }
+
+    public static File getYouthExchangeBenefitIdMap(String userId) {
+        return getFile(getUserDataDirectoryFile(userId), "youthExchangeBenefit.json");
+    }
     
     public static File getGameCenterMallItemMap(String userId) {
         return getFile(getUserDataDirectoryFile(userId), "gameCenterMallItem.json");
@@ -541,9 +545,41 @@ public class FileUtil {
     public static File getStatusFile(String userId) {
         return getFile(getUserDataDirectoryFile(userId), "status.json");
     }
-    
+
+    /**
+     * 当前支付宝登录账号：注入进程切号时写、界面进程读。
+     * <p>统计和功能统计都靠它选文件，这样切号后首页只看当前账号，不会把两个号的数据叠起来。
+     */
+    private static File getCurrentUidFile() {
+        return new File(MAIN_DIRECTORY_FILE, "current_uid.txt");
+    }
+
+    public static String readCurrentUid() {
+        try {
+            File f = getCurrentUidFile();
+            if (!f.isFile()) {
+                return "";
+            }
+            String s = readFromFile(f);
+            return s == null ? "" : s.trim();
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    public static void writeCurrentUid(String userId) {
+        if (StringUtil.isEmpty(userId) || userId.equals(readCurrentUid())) {
+            return;
+        }
+        write2File(userId, getCurrentUidFile());
+    }
+
+    /** 森林能量统计：按账号分文件；没有账号记录时沿用根目录旧文件，历史数据不丢 */
     public static File getStatisticsFile() {
-        File statisticsFile = getFile(MAIN_DIRECTORY_FILE, "statistics.json");
+        String uid = readCurrentUid();
+        File statisticsFile = StringUtil.isEmpty(uid)
+                ? getFile(MAIN_DIRECTORY_FILE, "statistics.json")
+                : getFile(getUserConfigDirectoryFile(uid), "statistics.json");
         if (statisticsFile.exists()) {
             // 遗留自检：真正写失败时 write2File 已会 Toast + 打异常日志，这里降为调试日志，避免每次读写都刷一行
             Log.debug(TAG + ", [statistics]读:" + statisticsFile.canRead() + ";写:" + statisticsFile.canWrite());
@@ -552,6 +588,14 @@ public class FileUtil {
             Log.debug(TAG + ", statisticsFile.json文件不存在");
         }
         return statisticsFile;
+    }
+
+    /** 各功能统计：同样按账号分文件 */
+    public static File getFeatureStatsFile() {
+        String uid = readCurrentUid();
+        return StringUtil.isEmpty(uid)
+                ? new File(MAIN_DIRECTORY_FILE, "feature_stats.json")
+                : new File(getUserConfigDirectoryFile(uid), "feature_stats.json");
     }
     
     public static File getTreeIdMapFile() {
@@ -736,6 +780,16 @@ public class FileUtil {
     public static File getOtherLogFile() {
         File otherLogFile = getFile(LOG_DIRECTORY_FILE, Log.getLogFileName("other"));
         return ensureFileExists(otherLogFile);
+    }
+
+    public static File getVillageLogFile() {
+        File villageLogFile = getFile(LOG_DIRECTORY_FILE, Log.getLogFileName("village"));
+        return ensureFileExists(villageLogFile);
+    }
+
+    public static File getSportsLogFile() {
+        File sportsLogFile = getFile(LOG_DIRECTORY_FILE, Log.getLogFileName("sports"));
+        return ensureFileExists(sportsLogFile);
     }
     
     public static File getGoldenBeansLogFile() {

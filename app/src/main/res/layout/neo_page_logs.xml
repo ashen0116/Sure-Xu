@@ -23,6 +23,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_gravity="end|center_vertical"
+                android:layout_marginEnd="20dp"
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
@@ -116,6 +117,17 @@
                 android:layout_height="wrap_content"
                 android:orientation="horizontal" />
         </HorizontalScrollView>
+
+        <!-- 「其他」日志专用：按子功能下拉筛选，其它分类下隐藏 -->
+        <Spinner
+            android:id="@+id/neo_logs_module_spinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/neu_card_pressed"
+            android:paddingVertical="6dp"
+            android:spinnerMode="dropdown"
+            android:visibility="gone" />
 
         <!-- 日志内容区：仅列表滚动，头部选项保持固定 -->
         <ScrollView

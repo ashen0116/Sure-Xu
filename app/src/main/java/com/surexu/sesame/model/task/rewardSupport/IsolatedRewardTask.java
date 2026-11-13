@@ -7,6 +7,7 @@ import com.surexu.sesame.data.modelFieldExt.IntegerModelField;
 import com.surexu.sesame.data.task.ModelTask;
 import com.surexu.sesame.hook.ApplicationHook;
 import com.surexu.sesame.model.base.TaskCommon;
+import com.surexu.sesame.util.FeatureStats;
 import com.surexu.sesame.util.Log;
 import com.surexu.sesame.util.idMap.UserIdMap;
 import java.text.SimpleDateFormat;
@@ -69,6 +70,9 @@ public abstract class IsolatedRewardTask extends ModelTask {
                                 Run run = new Run(currentUid, RuntimeInfo.getInstance());
                                 run.requireCurrent();
                                 run.state.put(nextKey(), Long.valueOf(System.currentTimeMillis() + (((long) this.intervalHours.getValue().intValue()) * 3600000)));
+                                // 首页「各功能」的「上次」靠这个时间：这类任务重写了 run()，
+                                // 不走 ModelTask 的埋点，必须自己补一条
+                                FeatureStats.touch(getName());
                                 execute(run);
                                 reentrantLock.unlock();
                                 return;
@@ -126,10 +130,25 @@ public abstract class IsolatedRewardTask extends ModelTask {
                 public final boolean isAllowed() {
                     return IsolatedRewardTask.Run.lambda$query$0();
                 }
-            });
+            }, false);
         }
 
-        private JSONObject call(String str, String str2, Allowed allowed) throws Exception {
+        /**
+         * 试探式调用：业务上没成功（今天已领过 / 名额满了 / 任务下线）只返回 null，不中断整轮。
+         * <p>
+         * 逐个任务批量做的时候必须用这个：一个任务失败就抛 Stopped 会把后面的任务全部带走。
+         * 真正的风控（error=1009、无响应、账号被切走）仍然照常停止。
+         */
+        public JSONObject tryQuery(String str, String str2) throws Exception {
+            return call(str, str2, new Allowed() {
+                @Override
+                public final boolean isAllowed() {
+                    return IsolatedRewardTask.Run.lambda$query$0();
+                }
+            }, true);
+        }
+
+        private JSONObject call(String str, String str2, Allowed allowed, boolean soft) throws Exception {
             requireCurrent();
             if (!allowed.isAllowed()) {
                 throw new Stopped();
@@ -167,6 +186,10 @@ public abstract class IsolatedRewardTask extends ModelTask {
                 if (jSONObject.optInt("error", 0) == 0 && Boolean.TRUE.equals(jSONObject.opt("success"))) {
                     return jSONObject;
                 }
+                if (soft) {
+                    Log.record(IsolatedRewardTask.this.getName() + "：该动作未成功，跳过 method=" + str);
+                    return null;
+                }
                 Log.record(IsolatedRewardTask.this.getName() + "：响应未明确成功，停止本轮 method=" + str);
                 throw new Stopped();
             } catch (Throwable th) {
@@ -189,7 +212,7 @@ public abstract class IsolatedRewardTask extends ModelTask {
                 return null;
             }
             this.state.put(str5, str4);
-            return call(str2, str3, allowed);
+            return call(str2, str3, allowed, false);
         }
 
         private String getClassKey() {

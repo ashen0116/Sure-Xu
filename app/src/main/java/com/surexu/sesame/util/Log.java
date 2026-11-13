@@ -151,6 +151,24 @@ public class Log {
                     .flattener(new PatternFlattener("{d HH:mm:ss.SSS} {t}: {m}"))
                     .build()).build();
 
+    /** 新村（STALL）日志：以前一股脑混进庄园日志，日志页单独开一个「新村」标签 */
+    private static final Logger villageLogger = XLog.tag("VILLAGE").printers(
+            new FilePrinter.Builder(FileUtil.LOG_DIRECTORY_FILE.getPath())
+                    .fileNameGenerator(new CustomDateFileNameGenerator("village"))
+                    .backupStrategy(new NeverBackupStrategy())
+                    .cleanStrategy(new NeverCleanStrategy())
+                    .flattener(new PatternFlattener("{d HH:mm:ss.SSS} {t}: {m}"))
+                    .build()).build();
+
+    /** 运动（SPORTS）日志：以前混在「其他」里，日志页单独开一个「运动」标签 */
+    private static final Logger sportsLogger = XLog.tag("SPORTS").printers(
+            new FilePrinter.Builder(FileUtil.LOG_DIRECTORY_FILE.getPath())
+                    .fileNameGenerator(new CustomDateFileNameGenerator("sports"))
+                    .backupStrategy(new NeverBackupStrategy())
+                    .cleanStrategy(new NeverCleanStrategy())
+                    .flattener(new PatternFlattener("{d HH:mm:ss.SSS} {t}: {m}"))
+                    .build()).build();
+
     /** 自动切号专用日志（写 switch.<date>.log，与业务日志隔离） */
     private static final Logger switchLogger = XLog.tag("SWITCH").printers(
             new FilePrinter.Builder(FileUtil.MAIN_DIRECTORY_FILE.getPath())
@@ -252,6 +270,11 @@ public class Log {
     }
 
     public static void i(String tag, String s) {
+        // 400000040「不支持rpc调用」只是支付宝不让走老接口，脚本会自动换备用方案把任务做完。
+        // 模块把原始响应原样打进运行日志，看着像一堆故障其实没事；错误日志里仍留完整 JSON 供排查。
+        if (s != null && (s.contains("400000040") || s.contains("不支持rpc调用"))) {
+            return;
+        }
         i(tag + ", " + s);
     }
 
@@ -316,16 +339,72 @@ public class Log {
                 com.surexu.sesame.data.AppConfig.INSTANCE.getEnableGoldenBeansLog(), goldenBeansLogger);
     }
 
+    /** 当前线程是否属于某个模块分组（ModelGroup 的 code） */
+    private static boolean currentModuleContains(String code) {
+        String m = MODULE_TAG.get();
+        return m != null && m.contains(code);
+    }
+
+    /** 芭芭农场「今日得肥」：打扫鸡屎、小鸡厨房、砸肥料、任务领奖等来源统一从日志里抽数 */
+    private static final java.util.regex.Pattern FERTILIZER_GAIN = java.util.regex.Pattern.compile(
+            "获得\\[(\\d+)g肥料\\]|砸出肥料🎖️(\\d+)g|奖励#获得\\[(\\d+)g\\]");
+
+    private static void recordFertilizerGain(String s) {
+        if (s == null || s.isEmpty()) {
+            return;
+        }
+        // 每日肥料 / 丰收礼包 / 七日礼包在 AntOrchard 里已经单独记过，别重复累加
+        if (s.contains("每日肥料") || s.contains("丰收礼包") || s.contains("七日礼包")) {
+            return;
+        }
+        try {
+            java.util.regex.Matcher m = FERTILIZER_GAIN.matcher(s);
+            if (m.find()) {
+                for (int i = 1; i <= m.groupCount(); i++) {
+                    String v = m.group(i);
+                    if (v != null) {
+                        com.surexu.sesame.util.FeatureStats.add("农场", "gain", Integer.parseInt(v));
+                        break;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
     public static void farm(String s) {
         countModuleLog();
         writeModuleLog(s, com.surexu.sesame.data.AppConfig.INSTANCE.getEnableViewRuntimeLog(), runtimeFarmLogger,
                 com.surexu.sesame.data.AppConfig.INSTANCE.getEnableFarmLog(), farmLogger);
+        recordFertilizerGain(s);
+        // 新村以前全混进庄园日志，这里额外写一份到 village.<date>.log
+        if (currentModuleContains("STALL")
+                && com.surexu.sesame.data.AppConfig.INSTANCE.getEnableVillageLog()) {
+            villageLogger.i(withUser(s));
+        }
+    }
+
+    public static void village(String s) {
+        countModuleLog();
+        writeModuleLog(s, com.surexu.sesame.data.AppConfig.INSTANCE.getEnableViewRuntimeLog(), runtimeFarmLogger,
+                com.surexu.sesame.data.AppConfig.INSTANCE.getEnableVillageLog(), villageLogger);
     }
 
     public static void other(String s) {
         countModuleLog();
         writeModuleLog(s, com.surexu.sesame.data.AppConfig.INSTANCE.getEnableViewRuntimeLog(), runtimeOtherLogger,
                 com.surexu.sesame.data.AppConfig.INSTANCE.getEnableOtherLog(), otherLogger);
+        // 运动以前全混进「其他」日志，这里额外写一份到 sports.<date>.log
+        if (currentModuleContains("SPORTS")
+                && com.surexu.sesame.data.AppConfig.INSTANCE.getEnableSportsLog()) {
+            sportsLogger.i(withUser(s));
+        }
+    }
+
+    public static void sports(String s) {
+        countModuleLog();
+        writeModuleLog(s, com.surexu.sesame.data.AppConfig.INSTANCE.getEnableViewRuntimeLog(), runtimeOtherLogger,
+                com.surexu.sesame.data.AppConfig.INSTANCE.getEnableSportsLog(), sportsLogger);
     }
 
     /**
@@ -351,7 +430,8 @@ public class Log {
 
     /**
      * 模块收尾汇总：按当前模块 tag 路由到对应分类文件，未进入模块上下文时退化为 record。
-     * <p>路由：FOREST/SPECIES→forest，FARM/STALL/ORCHARD→farm，GOLDENBEANS→goldenBeans，其余→other。
+     * <p>路由：FOREST/SPECIES→forest，STALL→village(新村)，FARM/ORCHARD→farm，
+     * SPORTS→sports(运动)，GOLDENBEANS→goldenBeans，其余→other。
      */
     public static void moduleSummary(String summary) {
         String module = MODULE_TAG.get();
@@ -361,8 +441,12 @@ public class Log {
         }
         if (module.contains("FOREST") || module.contains("SPECIES")) {
             forest(summary);
-        } else if (module.contains("FARM") || module.contains("STALL") || module.contains("ORCHARD")) {
+        } else if (module.contains("STALL")) {
+            village(summary);
+        } else if (module.contains("FARM") || module.contains("ORCHARD")) {
             farm(summary);
+        } else if (module.contains("SPORTS")) {
+            sports(summary);
         } else if (module.contains("GOLDENBEANS")) {
             goldenBeans(summary);
         } else {
@@ -395,6 +479,11 @@ public class Log {
         if (t instanceof TaskCancelledException) {
             return;
         }
+        // 运行日志里也留一行原因：以前调用方只写「执行异常:」这种死字，堆栈又只落在错误日志里，
+        // 看运行日志的人只看到一个空冒号，根本不知道出了什么事
+        String msg = t.getMessage();
+        i(tag + ", 异常原因:" + t.getClass().getSimpleName()
+                + (msg == null || msg.isEmpty() ? "" : ": " + msg));
         writeError(tag + ", " + android.util.Log.getStackTraceString(t));
     }
 

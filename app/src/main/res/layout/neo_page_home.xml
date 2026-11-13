@@ -109,14 +109,605 @@
                 android:textSize="14sp" />
         </LinearLayout>
 
-        <!-- 能量统计卡 -->
+        <!-- 运行状态 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <View
+                android:id="@+id/neo_home_status_dot"
+                android:layout_width="9dp"
+                android:layout_height="9dp"
+                android:background="@drawable/neu_dot_status" />
+
+            <TextView
+                android:id="@+id/neo_home_status_text"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="7dp"
+                android:text="未加载"
+                android:textColor="@color/neo_text_secondary"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/neo_home_status_version"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="5dp"
+                android:text=""
+                android:textColor="@color/neo_text_hint"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/neo_home_status_account"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:gravity="end"
+                android:singleLine="true"
+                android:ellipsize="start"
+                android:textColor="@color/neo_text_hint"
+                android:textSize="11sp" />
+
+            <TextView
+                android:id="@+id/neo_home_refresh_btn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/neu_card_pressed"
+                android:clickable="true"
+                android:focusable="true"
+                android:paddingHorizontal="10dp"
+                android:paddingVertical="4dp"
+                android:text="刷新"
+                android:textColor="@color/neo_text_secondary"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/neo_home_run_btn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/neu_card_pressed"
+                android:clickable="true"
+                android:focusable="true"
+                android:paddingHorizontal="10dp"
+                android:paddingVertical="4dp"
+                android:text="执行"
+                android:textColor="@color/neo_text_primary"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/neo_home_stop_btn"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:background="@drawable/neu_card_pressed"
+                android:clickable="true"
+                android:focusable="true"
+                android:paddingHorizontal="10dp"
+                android:paddingVertical="4dp"
+                android:text="停止"
+                android:textColor="#E0532C"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- 整轮执行进度：按 6 大类各一根进度条，点标题可折叠 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/neu_card_raised"
+            android:orientation="vertical"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="8dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/neo_home_section_bar"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="8dp">
+
+                <TextView
+                    android:id="@+id/neo_home_progress_title"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="执行进度"
+                    android:textColor="@color/neo_primary"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/neo_home_progress_toggle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:paddingHorizontal="8dp"
+                    android:paddingVertical="4dp"
+                    android:text="收起 ▲"
+                    android:textColor="@color/neo_primary"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/neo_home_progress_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:orientation="vertical" />
+        </LinearLayout>
+
+        <!-- 四档切换：今日/本月/今年/累计 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/neu_card_pressed"
+            android:orientation="horizontal"
+            android:padding="4dp">
+
+            <TextView
+                android:id="@+id/neo_home_range_day"
+                style="@style/NeoHomeRangeTab"
+                android:text="今日" />
+
+            <TextView
+                android:id="@+id/neo_home_range_month"
+                style="@style/NeoHomeRangeTab"
+                android:text="本月" />
+
+            <TextView
+                android:id="@+id/neo_home_range_year"
+                style="@style/NeoHomeRangeTab"
+                android:text="今年" />
+
+            <TextView
+                android:id="@+id/neo_home_range_all"
+                style="@style/NeoHomeRangeTab"
+                android:text="累计" />
+        </LinearLayout>
+
+        <!-- 森林卡 -->
+        <LinearLayout
+            android:id="@+id/neo_home_forest_card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:background="@drawable/neu_card_raised"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/neo_home_forest_title"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="森林 · 今日收取"
+                    android:textColor="@color/neo_text_secondary"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="单位 g"
+                    android:textColor="@color/neo_text_hint"
+                    android:textSize="10sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:orientation="horizontal">
+
+                <TextView
+                    android:id="@+id/neo_home_forest_value"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="0"
+                    android:textColor="@color/neo_primary"
+                    android:textSize="36sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginBottom="5dp"
+                    android:layout_marginStart="5dp"
+                    android:layout_weight="1"
+                    android:gravity="bottom"
+                    android:text="g"
+                    android:textColor="@color/neo_text_hint"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/neo_home_forest_cmp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="end"
+                    android:lineSpacingExtra="3dp"
+                    android:text=""
+                    android:textColor="@color/neo_text_hint"
+                    android:textSize="10sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal">
+
+                <LinearLayout style="@style/NeoHomeTile">
+
+                    <TextView
+                        android:id="@+id/neo_home_tile_help"
+                        style="@style/NeoHomeTileValue"
+                        android:text="0" />
+
+                    <TextView
+                        style="@style/NeoHomeTileLabel"
+                        android:text="帮收 g" />
+                </LinearLayout>
+
+                <LinearLayout style="@style/NeoHomeTile">
+
+                    <TextView
+                        android:id="@+id/neo_home_tile_water"
+                        style="@style/NeoHomeTileValue"
+                        android:text="0" />
+
+                    <TextView
+                        style="@style/NeoHomeTileLabel"
+                        android:text="浇水 g" />
+                </LinearLayout>
+
+                <LinearLayout style="@style/NeoHomeTile">
+
+                    <TextView
+                        android:id="@+id/neo_home_tile_watered"
+                        style="@style/NeoHomeTileValue"
+                        android:text="0" />
+
+                    <TextView
+                        style="@style/NeoHomeTileLabel"
+                        android:text="被浇水" />
+                </LinearLayout>
+
+                <LinearLayout
+                    style="@style/NeoHomeTile"
+                    android:layout_marginEnd="0dp">
+
+                    <TextView
+                        android:id="@+id/neo_home_tile_watering"
+                        style="@style/NeoHomeTileValue"
+                        android:text="0" />
+
+                    <TextView
+                        style="@style/NeoHomeTileLabel"
+                        android:text="浇水次数" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/neo_home_forest_round"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:gravity="end"
+                android:text="本轮已收 0 g"
+                android:textColor="@color/neo_text_hint"
+                android:textSize="10sp" />
+        </LinearLayout>
+
+        <!-- 视频红包提现入口：该页面没有公开入口，只能走支付有礼任务下发的 btnLinkUrl 直达 -->
+        <LinearLayout
+            android:id="@+id/neo_home_video_btn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:background="@drawable/neu_card_pressed"
+            android:clickable="true"
+            android:focusable="true"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="12dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="🎬"
+                android:textSize="18sp" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="10dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="视频红包提现"
+                    android:textColor="@color/neo_text_primary"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="打开视频页，点右上角「提现 X 元」"
+                    android:textColor="@color/neo_text_hint"
+                    android:textSize="10sp" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="›"
+                android:textColor="@color/neo_text_hint"
+                android:textSize="22sp" />
+        </LinearLayout>
+
+        <!-- 各功能：标题带底色，可折叠 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/neo_home_section_bar"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="9dp">
+
+            <TextView
+                android:id="@+id/neo_home_feature_title"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="各功能 · 今日"
+                android:textColor="@color/neo_primary"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/neo_home_feature_toggle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:clickable="true"
+                android:focusable="true"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="4dp"
+                android:text="收起 ▲"
+                android:textColor="@color/neo_primary"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/neo_home_feature_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:orientation="vertical" />
+
+        <!-- 其他功能：标题带底色，可折叠下面的列表 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:background="@drawable/neo_home_section_bar"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="12dp"
+            android:paddingVertical="9dp">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="其他功能"
+                android:textColor="@color/neo_primary"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/neo_home_more_toggle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:clickable="true"
+                android:focusable="true"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="4dp"
+                android:text="收起 ▲"
+                android:textColor="@color/neo_primary"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/neo_home_more_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/neu_card_raised"
+            android:orientation="vertical"
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="4dp" />
+
+        <!-- 自动切号：标题带底色，收起只藏内容，标题始终看得见，不会跟「其他功能」混在一起 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="@drawable/neo_home_section_bar"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="9dp">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="自动切号"
+                    android:textColor="@color/neo_primary"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/neo_home_switch_status"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/neu_pill"
+                    android:paddingHorizontal="10dp"
+                    android:paddingVertical="3dp"
+                    android:text="未开启"
+                    android:textColor="@color/neo_primary"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/neo_home_switch_toggle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:paddingHorizontal="6dp"
+                    android:paddingVertical="4dp"
+                    android:text="收起 ▲"
+                    android:textColor="@color/neo_primary"
+                    android:textSize="11sp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/neo_home_switch_container"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/neu_card_raised"
+                android:orientation="vertical"
+                android:paddingHorizontal="16dp"
+                android:paddingVertical="4dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingVertical="10dp">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="切换间隔"
+                        android:textColor="@color/neo_text_secondary"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/neo_home_switch_interval"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="—"
+                        android:textColor="@color/neo_text_primary"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="#F1F5FB" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingVertical="10dp">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="运行状态"
+                        android:textColor="@color/neo_text_secondary"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/neo_home_switch_phase"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="—"
+                        android:textColor="@color/neo_text_primary"
+                        android:textSize="11sp" />
+                </LinearLayout>
+
+                <View
+                    android:layout_width="match_parent"
+                    android:layout_height="1dp"
+                    android:background="#F1F5FB" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:paddingVertical="10dp">
+
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="下次切号时间"
+                        android:textColor="@color/neo_text_secondary"
+                        android:textSize="12sp" />
+
+                    <TextView
+                        android:id="@+id/neo_home_switch_next"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="—"
+                        android:textColor="@color/neo_text_primary"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- 启动静默：打开 APP 先别自动跑，留时间点执行或关功能 -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:background="@drawable/neu_card_raised"
             android:orientation="vertical"
-            android:padding="18dp">
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="12dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
@@ -128,328 +719,47 @@
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
-
-                    <View
-                        android:id="@+id/neo_home_energy_status_dot"
-                        android:layout_width="10dp"
-                        android:layout_height="10dp"
-                        android:background="@drawable/neu_dot_status" />
+                    android:orientation="vertical">
 
                     <TextView
-                        android:id="@+id/neo_home_energy_status_text"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
-                        android:text="未加载"
-                        android:textColor="@color/neo_text_secondary"
+                        android:text="执行规则"
+                        android:textColor="@color/neo_text_primary"
                         android:textSize="13sp"
                         android:textStyle="bold" />
 
                     <TextView
-                        android:id="@+id/neo_home_energy_status_version"
-                        android:layout_width="wrap_content"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginStart="6dp"
-                        android:text=""
+                        android:layout_marginTop="2dp"
+                        android:text="只有手动点执行、执行间隔到点、定点时间到点才会跑"
                         android:textColor="@color/neo_text_hint"
-                        android:textSize="12sp" />
+                        android:textSize="10sp" />
                 </LinearLayout>
 
                 <TextView
+                    android:id="@+id/neo_home_silence_toggle"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="能量统计"
-                    android:textColor="@color/neo_text_primary"
-                    android:textSize="13sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
-
-                        <!-- 表头：今日 / 本月 / 今年（蓝色加粗，右对齐） -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="14dp"
-                android:orientation="horizontal">
-
-                <TextView
-                    android:layout_width="56dp"
-                    android:layout_height="wrap_content"
-                    android:text=""
-                    android:textColor="@color/neo_text_hint"
-                    android:textSize="12sp" />
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="今日"
-                    android:textColor="@color/neo_blue"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="本月"
-                    android:textColor="@color/neo_blue"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="今年"
-                    android:textColor="@color/neo_blue"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
-
-            <!-- 收行 -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:orientation="horizontal">
-
-                <TextView
-                    android:layout_width="56dp"
-                    android:layout_height="wrap_content"
-                    android:text="收"
+                    android:layout_marginStart="10dp"
+                    android:background="@drawable/neu_pill"
+                    android:paddingHorizontal="12dp"
+                    android:paddingVertical="5dp"
+                    android:text="三种触发"
                     android:textColor="@color/neo_text_secondary"
-                    android:textSize="13sp" />
-
-                                <TextView
-                    android:id="@+id/neo_home_energy_collect_day"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="0"
-                    android:textColor="@color/neo_text_primary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                                <TextView
-                    android:id="@+id/neo_home_energy_collect_month"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="0"
-                    android:textColor="@color/neo_text_primary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                                <TextView
-                    android:id="@+id/neo_home_energy_collect_year"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="0"
-                    android:textColor="@color/neo_text_primary"
-                    android:textSize="12sp"
+                    android:textSize="11sp"
                     android:textStyle="bold" />
             </LinearLayout>
 
-            <!-- 帮行 -->
-            <LinearLayout
+            <TextView
+                android:id="@+id/neo_home_silence_hint"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:orientation="horizontal">
-
-                <TextView
-                    android:layout_width="56dp"
-                    android:layout_height="wrap_content"
-                    android:text="帮"
-                    android:textColor="@color/neo_text_secondary"
-                    android:textSize="13sp" />
-
-                                <TextView
-                    android:id="@+id/neo_home_energy_help_day"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="0"
-                    android:textColor="@color/neo_text_primary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                                <TextView
-                    android:id="@+id/neo_home_energy_help_month"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="0"
-                    android:textColor="@color/neo_text_primary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                                <TextView
-                    android:id="@+id/neo_home_energy_help_year"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="0"
-                    android:textColor="@color/neo_text_primary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
-
-            <!-- 浇行 -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:orientation="horizontal">
-
-                <TextView
-                    android:layout_width="56dp"
-                    android:layout_height="wrap_content"
-                    android:text="浇"
-                    android:textColor="@color/neo_text_secondary"
-                    android:textSize="13sp" />
-
-                                <TextView
-                    android:id="@+id/neo_home_energy_water_day"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="0"
-                    android:textColor="@color/neo_text_primary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                                <TextView
-                    android:id="@+id/neo_home_energy_water_month"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="0"
-                    android:textColor="@color/neo_text_primary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                                <TextView
-                    android:id="@+id/neo_home_energy_water_year"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="0"
-                    android:textColor="@color/neo_text_primary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
-
-            <!-- 被水行 -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:orientation="horizontal">
-
-                <TextView
-                    android:layout_width="56dp"
-                    android:layout_height="wrap_content"
-                    android:text="被水"
-                    android:textColor="@color/neo_text_secondary"
-                    android:textSize="13sp" />
-
-                                <TextView
-                    android:id="@+id/neo_home_energy_watered_day"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="0"
-                    android:textColor="@color/neo_text_primary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                                <TextView
-                    android:id="@+id/neo_home_energy_watered_month"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="0"
-                    android:textColor="@color/neo_text_primary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                                <TextView
-                    android:id="@+id/neo_home_energy_watered_year"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="0"
-                    android:textColor="@color/neo_text_primary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
-
-            <!-- 浇水行 -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="12dp"
-                android:orientation="horizontal">
-
-                <TextView
-                    android:layout_width="56dp"
-                    android:layout_height="wrap_content"
-                    android:text="浇水"
-                    android:textColor="@color/neo_text_secondary"
-                    android:textSize="13sp" />
-
-                                <TextView
-                    android:id="@+id/neo_home_energy_watering_day"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="0"
-                    android:textColor="@color/neo_text_primary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                                <TextView
-                    android:id="@+id/neo_home_energy_watering_month"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="0"
-                    android:textColor="@color/neo_text_primary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-
-                                <TextView
-                    android:id="@+id/neo_home_energy_watering_year"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:gravity="center"
-                    android:text="0"
-                    android:textColor="@color/neo_text_primary"
-                    android:textSize="12sp"
-                    android:textStyle="bold" />
-            </LinearLayout>
+                android:layout_marginTop="6dp"
+                android:text="其它情况一律不自动执行；点「停止」可随时中断本轮"
+                android:textColor="@color/neo_text_hint"
+                android:textSize="10sp" />
         </LinearLayout>
 
         <!-- 一言卡 -->
