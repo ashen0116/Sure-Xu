@@ -89,6 +89,9 @@ public final class MiniProgramHook {
     /** 各类实例字段缓存（含父类链），避免网络热路径重复反射 */
     private static final Map<Class<?>, List<Field>> modelFieldsCache = new ConcurrentHashMap<>();
 
+    /** 请求/响应参数对象图的宽松字段缓存：不限制 com.alipay 包名，用于补齐请求体抓包 */
+    private static final Map<Class<?>, List<Field>> anyFieldsCache = new ConcurrentHashMap<>();
+
     private static volatile ClassLoader sClassLoader = null;
     private static volatile String sProcessName = "";
 
@@ -203,8 +206,62 @@ public final class MiniProgramHook {
             time = String.valueOf(System.currentTimeMillis());
             methodLine = "MINI ? " + url;
             params = "";
+            // 请求体兜底: 所有请求入口都抓不到的情况下，从响应回调的对象图里挖原 request 引用。
+            // onHandleResponse 是唯一实测必命中的入口，把 thisObject 与 args 全量导出(只读)。
+            dumpResponseContext(args, thisObject, url);
         }
         Log.debug("记录\n时间: " + time + "\n方法: " + methodLine + "\n参数: " + params + "\n数据: " + body + "\n");
+    }
+
+    /** 响应上下文快照去重：同一 URL 只 dump 一次，避免埋点刷屏 */
+    private static final Set<String> dumpedCtxKeys =
+            Collections.synchronizedSet(new HashSet<String>());
+
+    /** 请求侧 hook 命中诊断计数：只打前几条，确认 processAsyncRequest 到底有没有被调用 */
+    private static volatile int sReqHitProbe = 0;
+
+    /**
+     * 从响应回调对象图里导出可能存在的请求体。
+     * <p>实测 JSBridge / processAsyncRequest / WebView / OkHttp 四条请求入口全部 0 命中，
+     * 只有 onHandleResponse 必命中；HttpRequestResponseTrigger 实例常持有 RequestModel，
+     * 故对其 thisObject 与 args 做宽松反射，把 JSON / 表单 / 含标识的字符串全部留痕。
+     */
+    private static void dumpResponseContext(Object[] args, Object thisObject, String url) {
+        if (!miniDebugEnabled() || isNoiseApi(url)) {
+            return;
+        }
+        if (!dumpedCtxKeys.add(url)) {
+            return;
+        }
+        if (dumpedCtxKeys.size() > 120) {
+            dumpedCtxKeys.clear();
+        }
+        List<String> strings = new ArrayList<>();
+        Set<Object> visited = Collections.newSetFromMap(new IdentityHashMap<Object, Boolean>());
+        collectAnyStrings(thisObject, 4, visited, strings);
+        if (args != null) {
+            for (Object a : args) {
+                collectAnyStrings(a, 2, visited, strings);
+                if (strings.size() >= 256) {
+                    break;
+                }
+            }
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String s : strings) {
+            String v = s.trim();
+            if (v.startsWith("http") || v.length() < 12) {
+                continue;
+            }
+            if (v.startsWith("{") || v.startsWith("[") || v.startsWith("data=")
+                    || v.contains("=") || v.contains("gameId") || v.contains("player_id")) {
+                sb.append(clip(deepPrettyJson(v))).append(" | ");
+                if (sb.length() > MAX_LOG_LEN) {
+                    break;
+                }
+            }
+        }
+        Log.debug("[MINI:CTX] " + url + "\n上下文: " + clip(sb.toString()) + "\n");
     }
 
     /**
@@ -272,6 +329,9 @@ public final class MiniProgramHook {
             protected void beforeHookedMethod(MethodHookParam p) {
                 try {
                     logRequestFromModels(p.args);
+                    // 配对可能失败(请求 URL 带 sign、响应侧只有裸 URL)，另留一份独立的请求快照，
+                    // 保证厂商上报接口的完整参数一定进抓包记录，不依赖 pendingMiniRequests
+                    dumpMiniRequestArgs(p.args);
                 } catch (Throwable ignored) {
                 }
             }
@@ -359,6 +419,178 @@ public final class MiniProgramHook {
         for (String url : candidates) {
             pendingMiniRequest(url, method, body);
         }
+    }
+
+    /** 已输出过的请求快照（URL + 请求体），避免同一请求反复刷屏 */
+    private static final Set<String> dumpedMiniRequestKeys =
+            Collections.synchronizedSet(new HashSet<String>());
+
+    /** 纯埋点/统计接口：不是业务接口，不进请求快照 */
+    private static boolean isNoiseApi(String url) {
+        String u = url.toLowerCase();
+        return u.contains("/apm/") || u.contains("/log/") || u.contains("platform-stat")
+                || u.contains("platform-apm") || u.contains("heartbeat") || u.contains("/collect");
+    }
+
+    /**
+     * 请求侧独立快照：不依赖 pendingMiniRequests 配对，直接从 processAsyncRequest 的模型参数里
+     * 宽松反射出 URL 与请求体，写进抓包记录。
+     * <p>原 collectStrings 只下钻 com.alipay 包名的模型，游戏厂商请求模型不在此包内，
+     * 导致请求体一直抓不到；这里不限包名，但限制深度/对象数/字段数，只读不改参数。
+     */
+    private static void dumpMiniRequestArgs(Object[] args) {
+        if (args == null || !miniDebugEnabled()) {
+            return;
+        }
+        // 命中诊断：前 5 次无条件留痕，把「hook 没调用」与「调用了但没提取到 URL」区分开
+        if (sReqHitProbe < 5) {
+            sReqHitProbe++;
+            StringBuilder probe = new StringBuilder();
+            for (Object a : args) {
+                probe.append(a == null ? "null" : a.getClass().getName()).append(", ");
+            }
+            Log.debug("[MINI:REQ-HIT] args=" + args.length + " 类型=" + probe + "\n");
+        }
+        List<String> strings = new ArrayList<>();
+        Set<Object> visited = Collections.newSetFromMap(new IdentityHashMap<Object, Boolean>());
+        for (Object arg : args) {
+            collectAnyStrings(arg, 3, visited, strings);
+            if (strings.size() >= 256) {
+                break;
+            }
+        }
+        if (sReqHitProbe <= 5 && strings.isEmpty()) {
+            Log.debug("[MINI:REQ-EMPTY] 参数对象图未提取到任何字符串\n");
+        }
+        String url = "";
+        for (String s : strings) {
+            if (s.startsWith("http") && isGameApi(s) && !isNoiseApi(s)) {
+                url = s.trim();
+                break;
+            }
+        }
+        if (url.isEmpty()) {
+            return;
+        }
+        String method = "?";
+        for (String s : strings) {
+            if ("GET".equals(s) || "POST".equals(s) || "PUT".equals(s) || "DELETE".equals(s)) {
+                method = s;
+                break;
+            }
+        }
+        String body = "";
+        for (String s : strings) {
+            if (s.startsWith("http")) {
+                continue;
+            }
+            if (s.startsWith("data=") || (s.trim().startsWith("{") && s.length() > 16)
+                    || s.contains("gameId=") || s.contains("\"gameId\"")) {
+                if (s.length() > body.length()) {
+                    body = s;
+                }
+            }
+        }
+        String key = url + "|" + body;
+        if (!dumpedMiniRequestKeys.add(key)) {
+            return;
+        }
+        if (dumpedMiniRequestKeys.size() > 300) {
+            dumpedMiniRequestKeys.clear();
+        }
+        String b = body;
+        if (b.startsWith("data=")) {
+            b = b.substring(5);
+            try {
+                b = URLDecoder.decode(b, "UTF-8");
+            } catch (Throwable ignored) {
+            }
+        }
+        Log.debug("[MINI:REQ] " + method + " " + url + "\n请求体: " + clip(deepPrettyJson(b)) + "\n");
+    }
+
+    /** 宽松递归收集对象图中的字符串：不限包名，跳过系统类，深度/对象数/字段数三重上限，只读 */
+    private static void collectAnyStrings(Object obj, int depth, Set<Object> visited, List<String> out) {
+        if (obj == null || depth < 0 || visited.size() > 128 || out.size() >= 256) {
+            return;
+        }
+        if (obj instanceof String) {
+            String s = (String) obj;
+            if (!s.isEmpty()) {
+                out.add(s);
+            }
+            return;
+        }
+        if (obj instanceof CharSequence) {
+            String s = obj.toString();
+            if (!s.isEmpty()) {
+                out.add(s);
+            }
+            return;
+        }
+        Class<?> c = obj.getClass();
+        if (c.isPrimitive() || c.isArray() || obj instanceof Number || obj instanceof Boolean
+                || obj instanceof Character || obj instanceof Enum) {
+            return;
+        }
+        String cn = c.getName();
+        if (cn.startsWith("java.") || cn.startsWith("android.") || cn.startsWith("androidx.")
+                || cn.startsWith("kotlin.") || cn.startsWith("kotlinx.") || cn.startsWith("dalvik.")) {
+            return;
+        }
+        if (obj instanceof Map) {
+            if (!visited.add(obj)) {
+                return;
+            }
+            for (Map.Entry<?, ?> e : ((Map<?, ?>) obj).entrySet()) {
+                collectAnyStrings(e.getKey(), depth - 1, visited, out);
+                collectAnyStrings(e.getValue(), depth - 1, visited, out);
+            }
+            return;
+        }
+        if (obj instanceof Collection) {
+            if (!visited.add(obj)) {
+                return;
+            }
+            for (Object v : (Collection<?>) obj) {
+                collectAnyStrings(v, depth - 1, visited, out);
+            }
+            return;
+        }
+        if (!visited.add(obj)) {
+            return;
+        }
+        for (Field f : anyFieldsCache.computeIfAbsent(c, MiniProgramHook::resolveAnyFields)) {
+            try {
+                collectAnyStrings(f.get(obj), depth - 1, visited, out);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    private static List<Field> resolveAnyFields(Class<?> clazz) {
+        List<Field> list = new ArrayList<>();
+        Class<?> cur = clazz;
+        int guard = 0;
+        while (cur != null && cur != Object.class && guard++ < 6 && list.size() < 60) {
+            for (Field fld : cur.getDeclaredFields()) {
+                int mods = fld.getModifiers();
+                if (Modifier.isStatic(mods)) {
+                    continue;
+                }
+                Class<?> t = fld.getType();
+                if (t.isPrimitive() || t.isArray()) {
+                    continue;
+                }
+                try {
+                    fld.setAccessible(true);
+                    list.add(fld);
+                } catch (Throwable ignored) {
+                }
+            }
+            cur = cur.getSuperclass();
+        }
+        return list;
     }
 
     /**

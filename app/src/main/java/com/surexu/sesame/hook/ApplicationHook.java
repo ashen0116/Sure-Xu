@@ -338,13 +338,8 @@ public class ApplicationHook {
                         // 这里的 appService 就是对应 Kotlin registerBroadcastReceiver(appContext!!) 的参数
                         registerBroadcastReceiver(appService);
 
-                        // 主动通知 App 本模块已被 LSPosed 启用并注入支付宝，用于显示「已激活」
-                        try {
-                            appService.sendBroadcast(new Intent("com.surexu.sesame.status"));
-                        } catch (Throwable t) {
-                            // 广播失败会导致 UI 迟迟显示「未激活」，留一行便于排查
-                            Log.i(TAG, "发送激活状态广播失败: " + t);
-                        }
+                        // 主动通知 App 本模块已被 LSPosed 启用并注入支付宝，并带上当前账号
+                        sendActiveStatus(appService);
 
                         Log.i(TAG, "Service onCreate");
                         context = appService.getApplicationContext();
@@ -376,8 +371,7 @@ public class ApplicationHook {
 
                             @Override
                             public void resume() {
-                                // 解冻后恢复任务执行
-                                ModelTask.startAllTask(false);
+                                // 解冻不等于可以执行：由定时链按「间隔 / 定点」合法触发点决定
                             }
                         });
                         AccountSwitchController.hostReady();
@@ -389,6 +383,14 @@ public class ApplicationHook {
                             @Override
                             public void run() {
                                 int checkInterval = 0;
+                                String trigger = pendingTrigger;
+                                pendingTrigger = "";
+                                // 只有「执行间隔到点」和「定点时间到点」才允许跑；
+                                // 首启 / 切号 / 回首页 / 重载 / 闹钟唤醒 / 异常重试一律只续排，不执行
+                                if (!TRIGGER_INTERVAL.equals(trigger) && !TRIGGER_SCHEDULED.equals(trigger)) {
+                                    scheduleNextLegalTrigger();
+                                    return;
+                                }
                                 try {
                                     checkInterval = BaseModel.getCheckInterval().getValue();
                                     if (!init) {
@@ -399,7 +401,7 @@ public class ApplicationHook {
                                     Log.record("开始执行");
                                     if (lastExecTime + 2000 > System.currentTimeMillis()) {
                                         Log.record("执行间隔较短，跳过执行");
-                                        execDelayedHandler(checkInterval);
+                                        scheduleNextLegalTrigger();
                                         return;
                                     }
                                     updateDay();
@@ -443,29 +445,11 @@ public class ApplicationHook {
                                         return;
                                     }
                                     TaskCommon.update();
-                                    ModelTask.startAllTask(false);
                                     lastExecTime = System.currentTimeMillis();
-
-                                    try {
-                                        List<String> execAtTimeList = BaseModel.getExecAtTimeList().getValue();
-                                        if (execAtTimeList != null) {
-                                            Calendar lastExecTimeCalendar = TimeUtil.getCalendarByTimeMillis(lastExecTime);
-                                            Calendar nextExecTimeCalendar = TimeUtil.getCalendarByTimeMillis(lastExecTime + checkInterval);
-                                            for (String execAtTime : execAtTimeList) {
-                                                Calendar execAtTimeCalendar = TimeUtil.getTodayCalendarByTimeStr(execAtTime);
-                                                if (execAtTimeCalendar != null && lastExecTimeCalendar.compareTo(execAtTimeCalendar) < 0 && nextExecTimeCalendar.compareTo(execAtTimeCalendar) > 0) {
-                                                    Log.record("设置定时执行:" + execAtTime);
-                                                    execDelayedHandler(execAtTimeCalendar.getTimeInMillis() - lastExecTime);
-                                                    FileUtil.clearLog();
-                                                    return;
-                                                }
-                                            }
-                                        }
-                                    } catch (Exception e) {
-                                        Log.err(TAG, "execAtTime err:", e);
-                                    }
-
-                                    execDelayedHandler(checkInterval);
+                                    Log.record("本轮触发：" + (TRIGGER_SCHEDULED.equals(trigger) ? "定点时间" : "执行间隔"));
+                                    ModelTask.startAllTask(false);
+                                    // 跑完只续到下一个合法触发点；定点对齐已并入 scheduleNextLegalTrigger，不再另起一套
+                                    scheduleNextLegalTrigger();
                                     FileUtil.clearLog();
                                 } catch (Exception e) {
                                     Log.record("执行异常:");
@@ -473,7 +457,7 @@ public class ApplicationHook {
                                 } finally {
                                     // 单链之下"本轮没人排期"就等于永久停摆：兜住 !init、各处 return 与未捕获异常
                                     if (!tickScheduled) {
-                                        execDelayedHandler(checkInterval > 0 ? checkInterval : FALLBACK_INTERVAL);
+                                        scheduleNextLegalTrigger();
                                     }
                                 }
                             }
@@ -558,6 +542,16 @@ public class ApplicationHook {
                 Log.err(TAG, "hook MiscUtils err:", t);
             }
             Log.i(TAG, "load success: " + lpparam.packageName + " proc=" + lpparam.processName + " hooked=" + hooked);
+        } else {
+            // 其它被 LSPosed 勾选的进程（小程序/WebView 沙箱等）：游戏页的真实进度上报可能就在这里，
+            // 只装抓包钩子、不跑模型与任务；是否写出日志仍由「抓包记录」开关决定
+            try {
+                installAllCaptureHooks(lpparam.classLoader);
+                Log.debug(TAG + ", capture hooks installed for other process: "
+                        + lpparam.packageName + " proc=" + lpparam.processName);
+            } catch (Throwable t) {
+                Log.err(TAG, "capture hooks for other process err:", t);
+            }
         }
     }
 
@@ -582,13 +576,16 @@ public class ApplicationHook {
             List<String> wakenAtTimeList = BaseModel.getWakenAtTimeList().getValue();
             if (wakenAtTimeList != null && !wakenAtTimeList.isEmpty()) {
                 Calendar nowCalendar = Calendar.getInstance();
-                for (int i = 1, len = wakenAtTimeList.size(); i < len; i++) {
+                // 从第一个开始遍历：原来从 i=1 起跳，导致列表里第一个唤醒时间（默认 06:50）永远不生效
+                for (int i = 0, len = wakenAtTimeList.size(); i < len; i++) {
                     try {
                         String wakenAtTime = wakenAtTimeList.get(i);
                         Calendar wakenAtTimeCalendar = TimeUtil.getTodayCalendarByTimeStr(wakenAtTime);
                         if (wakenAtTimeCalendar != null) {
                             if (wakenAtTimeCalendar.compareTo(nowCalendar) > 0) {
-                                PendingIntent wakenAtTimePendingIntent = PendingIntent.getBroadcast(context, i, new Intent("com.eg.android.AlipayGphone.sesame.execute"), getPendingIntentFlag());
+                                // requestCode 用 i+1：0 已经被每天 0 点那个闹钟占用了，
+                                // 共用 0 会让两个闹钟指向同一个 PendingIntent，取消一个就全没了
+                                PendingIntent wakenAtTimePendingIntent = PendingIntent.getBroadcast(context, i + 1, new Intent("com.eg.android.AlipayGphone.sesame.execute"), getPendingIntentFlag());
                                 if (setAlarmTask(wakenAtTimeCalendar.getTimeInMillis(), wakenAtTimePendingIntent)) {
                                     String wakenAtTimeKey = i + "|" + wakenAtTime;
                                     wakenAtTimeAlarmMap.put(wakenAtTimeKey, wakenAtTimePendingIntent);
@@ -685,12 +682,8 @@ public class ApplicationHook {
     }
 
     /**
-     * runInit 的实现体。exec 控制是否在重载完成后启动任务链：
-     * <ul>
-     *   <li>exec=true：重载完成后立即 execHandler() 跑任务（首启 / 切号 / 手动执行 / 手动重启）</li>
-     *   <li>exec=false：只重新初始化配置，不触发任务执行（UI 保存配置后仅让新配置生效，
-     *       避免"保存一下配置就被带着跑一整轮任务"）</li>
-     * </ul>
+     * runInit 的实现体。exec 已不再决定是否执行任务（保留参数只为兼容原有调用）：
+     * 任何重载都只把定时链排到下一个合法触发点，任务只在「手动点执行 / 间隔到点 / 定点到点」时启动。
      */
     private synchronized Boolean runInit(Boolean force, Boolean exec) {
         destroyHandler(force);
@@ -707,6 +700,12 @@ public class ApplicationHook {
                 ModuleHttpServerManager.getInstance().startIfNeeded(8080, "ET3vB^#td87sQqKaY*eMUJXP", processName, "com.eg.android.AlipayGphone");
 
                 UserIdMap.initUser(userId);
+                // 切号/重新加载时把当前账号写进共享标记，森林统计和各功能统计随即切到这个账号自己的文件，
+                // 首页才不会把两个号的数据混在一起显示
+                FileUtil.writeCurrentUid(userId);
+                com.surexu.sesame.util.Statistics.unload();
+                com.surexu.sesame.util.Statistics.load();
+                com.surexu.sesame.util.FeatureStats.reload();
                 Model.initAllModel();
                 // 模块版本只在执行阶段打一次，加载阶段不重复打印（否则启动段同一条出现两次）
                 Log.record("开始加载");
@@ -761,11 +760,10 @@ public class ApplicationHook {
                 init = true;
             }
             offline = false;
-            if (exec) {
-                execHandler();
-            } else {
-                Log.record("配置已重载，本轮不触发任务执行");
-            }
+            // 无论首启 / 切号 / 保存配置 / 闹钟唤醒，重载都只把链排到下一个合法触发点，
+            // 绝不在重载完成时顺手跑一整轮任务
+            scheduleNextLegalTrigger();
+            Log.record("配置已重载，本轮不触发任务执行");
             return true;
         } catch (Throwable th) {
             Log.err(TAG, "startHandler err:", th);
@@ -854,11 +852,20 @@ public class ApplicationHook {
         if (cl == null) {
             return;
         }
+        // 原生网络侦察: 仅在 WebView 进程加载底层 GOT hook(抓游戏方服务器连接), 失败自动跳过
+        if (processName != null && processName.contains("webview")) {
+            NativeProbe.init();
+        }
         installAriverRpcCaptureHooks(cl);
         installMtopDumpHooks(cl);
         installHttpCaptureHooks(cl);
         // 小程序(游戏等)网络抓包: 与上面几项共用「抓包记录」开关, 同样只读记录
         MiniProgramHook.install(cl, processName);
+        // JSBridge 通道抓包: 游戏 H5 经 AlipayJSBridge.call('httpRequest') 发起的请求走 Nebula/H5 容器
+        // 网络栈, 上述 ariver 抓包与 shouldInterceptRequest 均抓不到, 单独补上(只读)
+        JsBridgeHook.install(cl, processName);
+        // 侦察探针: 定位游戏方服务器域名/WebView 资源(只读, 不改任何流量)
+        installNetProbeHooks(cl);
     }
 
     /**
@@ -963,6 +970,72 @@ public class ApplicationHook {
      * (蚂蚁森林等页面走的就是 MTOP; 含 customDomain=mtop.ele.me 的饿了么链路), 无需 root 抓包工具。
      * <p>仅记录, 不改动请求/响应; mtopsdk 启动早期未加载时自动重试。
      */
+    /** 侦察探针: 打印游戏连出去的非阿里域名与 WebView 资源, 用来定位游戏方服务器(只读, 不改任何流量)。 */
+    private static void installNetProbeHooks(ClassLoader cl) {
+        if (cl == null) {
+            return;
+        }
+        try {
+            XHelpers.findAndHookMethod("java.net.InetAddress", cl, "getByName", String.class,
+                    new XC_MethodHook() {
+                        @Override
+                        protected void afterHookedMethod(MethodHookParam param) {
+                            try {
+                                String host = (String) param.args[0];
+                                if (host != null && !isAliHost(host)) {
+                                    Log.debug("[DNS] " + processName + " " + host);
+                                }
+                            } catch (Throwable t) { /* ignore */ }
+                        }
+                    });
+        } catch (Throwable t) {
+            Log.i(TAG, "dns probe err: " + t);
+        }
+        try {
+            XHelpers.findAndHookMethod("android.webkit.WebViewClient", cl, "shouldInterceptRequest",
+                    cl.loadClass("android.webkit.WebView"), String.class, new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            try {
+                                String url = (String) param.args[1];
+                                if (url != null && !isAliHost(url)) {
+                                    Log.debug("[WV] " + processName + " " + url);
+                                }
+                            } catch (Throwable t) { /* ignore */ }
+                        }
+                    });
+        } catch (Throwable t) {
+            Log.i(TAG, "wv1 probe err: " + t);
+        }
+        try {
+            XHelpers.findAndHookMethod("android.webkit.WebViewClient", cl, "shouldInterceptRequest",
+                    cl.loadClass("android.webkit.WebView"), cl.loadClass("android.webkit.WebResourceRequest"),
+                    new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            try {
+                                Object req = param.args[1];
+                                String url = (String) XHelpers.callMethod(req, "getUrl");
+                                if (url != null && !isAliHost(url)) {
+                                    Log.debug("[WV] " + processName + " " + url);
+                                }
+                            } catch (Throwable t) { /* ignore */ }
+                        }
+                    });
+        } catch (Throwable t) {
+            Log.i(TAG, "wv2 probe err: " + t);
+        }
+    }
+
+    private static boolean isAliHost(String h) {
+        String s = h == null ? "" : h.toLowerCase(java.util.Locale.US);
+        return s.contains("alipay") || s.contains("taobao") || s.contains("tmall")
+                || s.contains("aliyun") || s.contains("alibaba") || s.contains("amap")
+                || s.contains("alicdn") || s.contains("alipayobjects") || s.contains("mmstat")
+                || s.contains("127.0.0.1") || s.contains("localhost") || s.contains("10.")
+                || s.contains("192.168.") || s.contains("172.");
+    }
+
     private static void installMtopDumpHooks(final ClassLoader cl) {
         if (mtopDumpHooksInstalled || cl == null) {
             return;
@@ -1416,7 +1489,22 @@ public class ApplicationHook {
                                 String key = methodName + " " + url;
                                 if (!key.equals(lastHttpCaptureKey)) {
                                     lastHttpCaptureKey = key;
-                                    Log.debug("[HTTP] " + methodName + " " + url + " -> " + code + "\n");
+                                    StringBuilder line = new StringBuilder("[HTTP] ")
+                                            .append(methodName).append(" ").append(url)
+                                            .append(" -> ").append(code);
+                                    // 游戏业务接口 / 非阿里域名：连请求体和返回体一起录下来，
+                                    // 才能照抄真实的「完成进度」请求；静态资源不录，避免日志爆掉
+                                    if (shouldCaptureBody(url)) {
+                                        String reqBody = captureRequestBody(request);
+                                        String respBody = captureResponseBody(response);
+                                        if (!reqBody.isEmpty()) {
+                                            line.append("\n请求内容: ").append(clipCapture(reqBody));
+                                        }
+                                        if (!respBody.isEmpty()) {
+                                            line.append("\n返回内容: ").append(clipCapture(respBody));
+                                        }
+                                    }
+                                    Log.debug(line.append("\n").toString());
                                 }
                             } catch (Throwable t) {
                                 Log.printStackTrace(t);
@@ -1427,6 +1515,61 @@ public class ApplicationHook {
                     }
                 });
         XHelpers.callMethod(builder, "addInterceptor", proxy);
+    }
+
+    /** 是否值得记录请求/返回内容：游戏业务接口和非阿里游戏方域名，静态资源一律跳过 */
+    private static boolean shouldCaptureBody(String url) {
+        String u = url == null ? "" : url.toLowerCase(java.util.Locale.US);
+        if (u.contains("alipayobjects") || u.contains("alicdn") || u.contains("mmstat")
+                || u.contains("gtimg") || u.contains("arms")) {
+            return false;
+        }
+        return u.contains("game") || u.contains("task") || u.contains("p2e")
+                || u.contains("report") || u.contains("progress") || u.contains("play")
+                || u.contains("quhaotui") || u.contains("iyoudui")
+                || (!u.contains("alipay") && !u.contains("taobao") && !u.contains("tmall")
+                && !u.contains("aliyun") && !u.contains("amap"));
+    }
+
+    /** 用 okio.Buffer 复制一份请求体，不消费原始流，绝不因抓包影响真实请求 */
+    private static String captureRequestBody(Object request) {
+        try {
+            Object body = XHelpers.callMethod(request, "body");
+            if (body == null) {
+                return "";
+            }
+            ClassLoader cl = request.getClass().getClassLoader();
+            Class<?> sinkClazz = Class.forName("okio.BufferedSink", false, cl);
+            Class<?> bufferClazz = Class.forName("okio.Buffer", false, cl);
+            Object buffer = bufferClazz.getDeclaredConstructor().newInstance();
+            Method writeTo = body.getClass().getMethod("writeTo", sinkClazz);
+            writeTo.invoke(body, buffer);
+            return String.valueOf(bufferClazz.getMethod("readUtf8").invoke(buffer));
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /** Response.peekBody 取一份响应内容副本，不消费原始响应流 */
+    private static String captureResponseBody(Object response) {
+        try {
+            Method peek = response.getClass().getMethod("peekBody", long.class);
+            Object body = peek.invoke(response, 65536L);
+            if (body == null) {
+                return "";
+            }
+            return String.valueOf(XHelpers.callMethod(body, "string"));
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    private static String clipCapture(String s) {
+        if (s == null) {
+            return "";
+        }
+        String one = s.replaceAll("\\r?\\n", " ");
+        return one.length() > 8000 ? one.substring(0, 8000) + "..." : one;
     }
 
     /**
@@ -1482,8 +1625,56 @@ public class ApplicationHook {
         }
     }
 
+    /** 只有三种情况允许跑一轮：手动点执行、执行间隔到点、定点时间到点 */
+    private static final String TRIGGER_INTERVAL = "interval";
+    private static final String TRIGGER_SCHEDULED = "scheduled";
+    /** 下一跳的触发来源；MAIN_TASK 消费一次，空串＝这一跳不允许执行任务 */
+    private static volatile String pendingTrigger = "";
+
+    /** 首启 / 切号 / 回首页 / 重载配置 / 闹钟唤醒：只把链排到下一个合法触发点，绝不在这里启动任务 */
     private static void execHandler() {
-        startMainTask();
+        scheduleNextLegalTrigger();
+    }
+
+    /** 把定时链排到下一个用户允许的触发点：最近的定点时刻，或执行间隔到点。只排期，不执行。 */
+    private static void scheduleNextLegalTrigger() {
+        long interval = Math.max(BaseModel.getCheckInterval().getValue(), FALLBACK_INTERVAL);
+        long now = System.currentTimeMillis();
+        long delay = interval;
+        String trigger = TRIGGER_INTERVAL;
+        try {
+            java.util.List<String> atTimes = BaseModel.getExecAtTimeList().getValue();
+            if (atTimes != null) {
+                for (String atTime : atTimes) {
+                    // 只认 HHMM / HHMMSS 的自定义时间点；历史配置里的 "24"、"-1" 等标记不是时间点，跳过
+                    if (atTime == null || (atTime.length() != 4 && atTime.length() != 6)) {
+                        continue;
+                    }
+                    Calendar c = TimeUtil.getTodayCalendarByTimeStr(atTime);
+                    if (c == null) {
+                        continue;
+                    }
+                    long at = c.getTimeInMillis();
+                    if (at <= now) {
+                        c.add(Calendar.DAY_OF_MONTH, 1);
+                        at = c.getTimeInMillis();
+                    }
+                    if (at - now < delay) {
+                        delay = at - now;
+                        trigger = TRIGGER_SCHEDULED;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        execDelayedHandler(Math.max(1000L, delay), trigger);
+        try {
+            com.surexu.sesame.util.RunProgress.publish("NEXT", "",
+                    TimeUtil.getTimeStr(scheduledExecAt) + "#" + (TRIGGER_SCHEDULED.equals(trigger) ? "定点" : "间隔"), null);
+        } catch (Throwable ignored) {
+        }
+        Log.record("下一次执行：" + TimeUtil.getTimeStr(scheduledExecAt)
+                + "#" + (TRIGGER_SCHEDULED.equals(trigger) ? "定点" : "间隔"));
     }
 
     /** 起跳失败或取不到间隔时的兜底排期间隔（下限 1 分钟，避免自旋） */
@@ -1495,8 +1686,8 @@ public class ApplicationHook {
             if (Boolean.TRUE.equals(mainTask.startTask(false)) || tickScheduled) {
                 return;
             }
-            // 没跑起来（check 不通过等）又无人排期：兜底续排，否则链断
-            execDelayedHandler(Math.max(BaseModel.getCheckInterval().getValue(), FALLBACK_INTERVAL));
+            // 没跑起来（check 不通过等）又无人排期：兜底续到下一个合法触发点，否则链断
+            scheduleNextLegalTrigger();
         } catch (Throwable t) {
             Log.printStackTrace(t);
         }
@@ -1520,7 +1711,13 @@ public class ApplicationHook {
         startMainTask();
     };
 
+    /** 不带触发来源的排期＝这一跳不允许执行任务（异常重试等），由 MAIN_TASK 重新排到合法触发点 */
     private static void execDelayedHandler(long delayMillis) {
+        execDelayedHandler(delayMillis, "");
+    }
+
+    private static void execDelayedHandler(long delayMillis, String trigger) {
+        pendingTrigger = trigger == null ? "" : trigger;
         // 调度时立即记录下次执行时间，所有任务完成时 updateLastExecText 会一并写入
         try {
             NotificationUtil.updateNextExecText(System.currentTimeMillis() + delayMillis);
@@ -1739,6 +1936,25 @@ public class ApplicationHook {
         }
     }
 
+    /**
+     * 通知界面「已激活 + 当前支付宝登录账号」。
+     * <p>旧版广播不带 runType / uid，界面只能靠「无 extra 就当已激活」猜，切号后也看不到账号变化，
+     * 所以看起来像自动切号没生效。这里把两个值都带上。
+     */
+    private static void sendActiveStatus(Context ctx) {
+        try {
+            Intent status = new Intent("com.surexu.sesame.status");
+            status.putExtra("runType", RunType.MODEL.getCode());
+            String uid = UserIdMap.getCurrentUid();
+            if (!StringUtil.isEmpty(uid)) {
+                status.putExtra("uid", uid);
+            }
+            ctx.sendBroadcast(status);
+        } catch (Throwable th) {
+            Log.err(TAG, "sesame sendBroadcast status err:", th);
+        }
+    }
+
     public static void restartByBroadcast() {
         try {
             context.sendBroadcast(new Intent("com.eg.android.AlipayGphone.sesame.restart"));
@@ -1879,16 +2095,29 @@ public class ApplicationHook {
                             r2.finish();
                         }, "Sesame-Execute").start();
                         break;
+                    case "com.eg.android.AlipayGphone.sesame.stop":
+                        // 手动点「立即停止」：停掉主链与所有正在跑的功能；
+                        // 定时链继续排到下一个合法触发点，别把之后的间隔/定点执行也一并关掉
+                        try {
+                            if (mainTask != null) {
+                                mainTask.stopTask();
+                            }
+                            ModelTask.stopAllTask();
+                            mainHandler.removeCallbacks(MAIN_TICK);
+                            tickScheduled = false;
+                            scheduleNextLegalTrigger();
+                            com.surexu.sesame.util.RunProgress.publish("STOPPED", "", "", null);
+                            Log.record("⏹已手动停止全部任务，下一次按间隔/定点照常");
+                        } catch (Throwable th) {
+                            Log.printStackTrace(TAG, th);
+                        }
+                        break;
                     case "com.eg.android.AlipayGphone.sesame.reLogin":
                         reLogin();
                         break;
                     case "com.eg.android.AlipayGphone.sesame.status":
-                        try {
-                            Log.i(TAG, "broadcast: recv query, send active status");
-                            context.sendBroadcast(new Intent("com.surexu.sesame.status"));
-                        } catch (Throwable th) {
-                            Log.err(TAG, "sesame sendBroadcast status err:", th);
-                        }
+                        Log.i(TAG, "broadcast: recv query, send active status");
+                        sendActiveStatus(context);
                         break;
                     case "com.eg.android.AlipayGphone.sesame.rpctest":
                         try {

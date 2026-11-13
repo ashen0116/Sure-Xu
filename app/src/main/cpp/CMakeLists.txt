@@ -1,19 +1,5 @@
-cmake_minimum_required(VERSION 3.22.1)
-
-project("watermark")
-
-add_library(
-        watermark
-        SHARED
-        watermark.cpp
-)
-
-find_library(
-        log-lib
-        log
-)
-
-target_link_libraries(
-        watermark
-        ${log-lib}
-)
+cmake_minimum_required(VERSION 3.18.1)
+project(nethook C)
+add_library(nethook SHARED nethook.c)
+find_library(log-lib log)
+target_link_libraries(nethook ${log-lib})

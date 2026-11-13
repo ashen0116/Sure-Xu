@@ -153,21 +153,17 @@ public final class MtopSender {
         }
         try {
             String cn = builder.getClass().getName();
-            if (!CLS_BUILDER.equals(cn) && !cn.startsWith(CLS_BUILDER)) {
+            // 支付宝用标准 MtopBuilder；闲鱼用其子类 MtopBusiness(com.taobao.tao.remotebusiness.MtopBusiness)，
+            // 两者都持有 Mtop 实例/ttid/请求头，一并纳入捕获。
+            boolean isMtopBuilder = CLS_BUILDER.equals(cn) || cn.startsWith(CLS_BUILDER);
+            boolean isMtopBusiness = cn.contains("MtopBusiness");
+            if (!isMtopBuilder && !isMtopBusiness) {
                 return;
             }
             if (templateBuilder == null) {
                 templateBuilder = builder;
             }
-            if (StringUtil.isEmpty(ttid)) {
-                Object v = tryInvoke(builder, "getTtid");
-                if (v == null) {
-                    v = readFieldByName(builder, "ttid");
-                }
-                if (v != null && !String.valueOf(v).isEmpty()) {
-                    ttid = String.valueOf(v);
-                }
-            }
+            // 先捕获 Mtop 实例，再优先从实例读 ttid：闲鱼的 ttid 挂在 Mtop 实例上(MtopBusiness 上没有)
             if (mtopInstance == null) {
                 captureInstance(findMtop(builder, 2, new int[]{60}));
             }
@@ -177,6 +173,21 @@ public final class MtopSender {
                         captureInstance(arg);
                         break;
                     }
+                }
+            }
+            if (StringUtil.isEmpty(ttid)) {
+                Object v = null;
+                if (mtopInstance != null) {
+                    v = tryInvoke(mtopInstance, "getTtid");
+                }
+                if (v == null) {
+                    v = tryInvoke(builder, "getTtid");
+                }
+                if (v == null) {
+                    v = readFieldByName(builder, "ttid");
+                }
+                if (v != null && !String.valueOf(v).isEmpty()) {
+                    ttid = String.valueOf(v);
                 }
             }
             if (templateRequestClazz == null) {
@@ -438,6 +449,17 @@ public final class MtopSender {
         if (ctx != null) {
             pool.add(ctx);
         }
+        // 0) 闲鱼用 MtopBusiness 封装：优先复用宿主模板(其 MtopContext 已由宿主初始化，
+        //    新建标准 MtopBuilder 会因 MtopContext 未初始化而报 ANDROID_SYS_MTOPCONTEXT_INIT_ERROR)
+        if (templateBuilder != null && templateBuilder.getClass().getName().contains("MtopBusiness")) {
+            // 先 setter 再字段直写(request/mtopRequest)，比 callByName 更稳
+            for (String name : new String[]{"request", "mtopRequest"}) {
+                String how = writeValue(templateBuilder, name, request);
+                if (how != null) {
+                    return templateBuilder;
+                }
+            }
+        }
         // 1) mtop.build(request, ttid) 之类工厂方法
         for (Method m : allMethods(mtop.getClass())) {
             String n = m.getName();
@@ -503,6 +525,16 @@ public final class MtopSender {
 
     /** 对齐宿主 JS 侧传下来的 MTOP 环境参数(自建 builder 的默认值不保证一致)。 */
     private static void applyConfig(Object builder, Object request, boolean needWua, List<String> notes) {
+        // 闲鱼 MtopBusiness 是宿主完整配置好的(needSession/needEcode 已按接口设好)，
+        // 这里只对齐 ttid/appkey，避免强制镜像把它自身的 session/ecode 状态破坏掉(会导致 MTOPCONTEXT_INIT_ERROR)。
+        if (builder != null && builder.getClass().getName().contains("MtopBusiness")) {
+            if (!StringUtil.isEmpty(ttid)) {
+                mirror(builder, request, notes, "ttid", ttid);
+            }
+            mirror(builder, request, notes, "isvOpenAppkey", ISV_OPEN_APPKEY);
+            notes.add("idlefish=保留宿主配置");
+            return;
+        }
         mirror(builder, request, notes, "needWua", needWua);
         mirror(builder, request, notes, "needHttps", Boolean.TRUE);
         mirror(builder, request, notes, "usePost", Boolean.FALSE);
