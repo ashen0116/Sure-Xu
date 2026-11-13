@@ -15,6 +15,7 @@ import com.surexu.sesame.entity.AlipayAntStallTaskList;
 import com.surexu.sesame.entity.AlipayUser;
 import com.surexu.sesame.model.base.TaskCommon;
 import com.surexu.sesame.model.base.TaskAlternative;
+import com.surexu.sesame.model.common.gamePlay.GameTaskRouter;
 import com.surexu.sesame.model.task.antFarm.AntFarm.TaskStatus;
 import com.surexu.sesame.model.task.antFarm.AntFarmRpcCall;
 import com.surexu.sesame.model.task.readingDada.ReadingDada;
@@ -312,6 +313,7 @@ public class AntStall extends ModelTask {
             JSONObject jo = new JSONObject(AntStallRpcCall.settleReceivable());
             if (MessageUtil.checkResultCode(TAG, jo)) {
                 Log.farm("蚂蚁新村⛪收取小摊结余#获得[" + amount + "木兰币]");
+                FeatureStats.add("新村", "coin", amount);
             }
         }
         catch (Throwable t) {
@@ -556,6 +558,7 @@ public class AntStall extends ModelTask {
             JSONObject jo = new JSONObject(AntStallRpcCall.shopOpen(seatId, userId, shopId));
             if (MessageUtil.checkResultCode(TAG, jo)) {
                 Log.farm("蚂蚁新村⛪在[" + UserIdMap.getMaskName(userId) + "]的新村摆摊");
+                FeatureStats.add("新村", "booth", 1);
                 return true;
             }
         }
@@ -623,6 +626,7 @@ public class AntStall extends ModelTask {
             if (MessageUtil.checkResultCode(TAG, jo)) {
                 double amount = income.getDouble("amount");
                 Log.farm("蚂蚁新村⛪在[" + UserIdMap.getMaskName(userId) + "]的新村收摊#获得[" + amount + "木兰币]");
+                FeatureStats.add("新村", "coin", amount);
             }
         }
         catch (Throwable t) {
@@ -668,6 +672,8 @@ public class AntStall extends ModelTask {
                 }
                 
                 if (Objects.equals(TaskStatus.TODO.name(), taskStatus)) {
+                    // 游戏类任务先上报游玩行为，再走完成/领奖；游戏 id 从任务下发字段动态取
+                    GameTaskRouter.play("新村", task);
                     if (!doStallTask(task, title)) {
                         continue;
                     }
@@ -1215,6 +1221,7 @@ public class AntStall extends ModelTask {
                 if (MessageUtil.checkResultCode(TAG, jo)) {
                     double amount = jo.getJSONObject("pasteIncome").getDouble("amount");
                     Log.farm("蚂蚁新村🚫在[" + UserIdMap.getMaskName(friendUserId) + "]的新村贴罚单#获得[" + amount + "木兰币]");
+                    FeatureStats.add("新村", "ticket", amount);
                 }
                 TimeUtil.sleep(1000);
             }
