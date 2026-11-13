@@ -21,6 +21,7 @@ import com.surexu.sesame.entity.PromiseSimpleTemplate;
 import com.surexu.sesame.hook.ApplicationHook;
 import com.surexu.sesame.model.base.TaskCommon;
 import com.surexu.sesame.model.base.TaskAlternative;
+import com.surexu.sesame.model.common.gamePlay.GameTaskRouter;
 import com.surexu.sesame.model.extensions.ExtensionsHandle;
 import com.surexu.sesame.model.task.antOrchard.AntOrchard;
 import com.surexu.sesame.model.task.antOrchard.AntOrchardRpcCall;
@@ -1725,6 +1726,9 @@ public class AntMember extends BaseAntMember {
                     return;
                 }
             }
+
+            // 游戏类任务先上报游玩行为，再走完成/领奖；最后 verifyPendingTasks 按任务列表复核
+            GameTaskRouter.play("会员游戏中心", taskObj);
 
             // 执行任务：原先只处理 actionType=VIEW，其它类型直接 return（列表拿到了却静默不处理、
             // 连日志都没有）。现在各类都尝试一次。

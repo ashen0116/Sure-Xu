@@ -135,9 +135,10 @@ public class AntOrchardDrawTaskForge {
             AntOrchardRpcCall.submitDrawGameEvent(gameId, "GAME_FIRST_FRAME", 0L, null);
             TimeUtil.sleep(500);
             AntOrchardRpcCall.submitDrawGameEvent(gameId, "loading_completed", 0L, null);
-            int playSeconds = 3 + (int) (Math.random() * 2);
+            // 等待 / playTime(秒) / GAME_ELAPASED_TIME(毫秒) 三处同源，避免上报时间自相矛盾
+            int playSeconds = FAKE_PLAY_SEC;
             TimeUtil.sleep(playSeconds * 1000L);
-            AntOrchardRpcCall.submitDrawGameDuration(gameId, FAKE_PLAY_SEC, CH_INFO);
+            AntOrchardRpcCall.submitDrawGameDuration(gameId, playSeconds, CH_INFO);
             AntOrchardRpcCall.submitDrawGameEvent(gameId, "game_play", playSeconds * 1000L, null);
             Log.farm("农场抽抽乐🎮[" + taskName + "]已伪造游玩 " + playSeconds + "s(game_id=" + gameId + ")");
             return true;

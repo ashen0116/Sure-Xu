@@ -17,6 +17,7 @@ import com.surexu.sesame.data.modelFieldExt.BooleanModelField;
 import com.surexu.sesame.data.modelFieldExt.StringModelField;
 import com.surexu.sesame.data.task.ModelTask;
 import com.surexu.sesame.model.base.TaskCommon;
+import com.surexu.sesame.util.FeatureStats;
 import com.surexu.sesame.util.Log;
 import com.surexu.sesame.util.TimeUtil;
 
@@ -274,6 +275,7 @@ public class PlantingFlowers extends ModelTask {
                     tr.put("state", 2);
                     remainHelpCount--;
                     Log.other(DISPLAY_NAME + " 助力成功: 为好友 [" + targetUser + "] 助力");
+                    FeatureStats.add("种花大作战", "assist", 1);
                 } else if ("today_have_help".equals(state)) {
                     Log.other(DISPLAY_NAME + " 今日已帮好友 [" + targetUser + "] 助力过");
                 } else if ("helper_to_limit".equals(state)) {
@@ -662,6 +664,9 @@ public class PlantingFlowers extends ModelTask {
                 done++;
             }
             Log.other(DISPLAY_NAME + " 日常任务完成 " + done + " 个");
+            if (done > 0) {
+                FeatureStats.add("种花大作战", "task", done);
+            }
         } catch (Throwable t) {
             Log.err(TAG, "doTasks err:", t);
         }
@@ -731,6 +736,7 @@ public class PlantingFlowers extends ModelTask {
                         body, session.token, session.uid);
                 if (PlantingFlowersRpcCall.isOk(waterRes)) {
                     Log.other(DISPLAY_NAME + " 浇水成功，等待下一次生长");
+                    FeatureStats.add("种花大作战", "water", 1);
                     collectBeans(session);
                     TimeUtil.sleep(1000);
                     JSONObject fresh = queryDevelop(session);

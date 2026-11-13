@@ -157,6 +157,20 @@ public final class AccountSwitchState {
         defer();
     }
 
+    /**
+     * 预计下一次切号的时间（墙上时钟毫秒）。空闲计时用的是 elapsedRealtime，
+     * 这里换算成 System.currentTimeMillis，首页才能直接显示成「16:35」。
+     * 还没进入倒计时 / 条件没满足时返回 -1。
+     */
+    public synchronized long nextSwitchWallTime(int intervalSeconds) {
+        long base = cooldownSince >= 0 ? cooldownSince : idleSince;
+        if (base < 0) {
+            return -1L;
+        }
+        long remain = base + intervalMillis(intervalSeconds) - android.os.SystemClock.elapsedRealtime();
+        return System.currentTimeMillis() + Math.max(0L, remain);
+    }
+
     static long intervalMillis(int i) {
         return ((long) Math.max(15, Math.min(AccountSwitchIntervalDraft.MAX_SECONDS, i))) * 1000;
     }

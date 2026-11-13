@@ -1006,6 +1006,7 @@ public class AntOrchard extends ModelTask {
             boolean batch = spreadUseBatchThisTime;
             Log.farm("芭芭农场🌳" + scene.nickname() + "施肥#消耗[" + cost + "g肥料]"
                     + (batch ? "#一键5次" : "") + "#目标[" + targetSpreadTimes() + "次]");
+            com.surexu.sesame.util.FeatureStats.add("农场", "spread", batch ? 5 : 1);
 
             // 检查施肥进度：单次只加 0.01%(1) 或 一键5次只加 0.05%(5) 即被限制施肥，当天不再施肥
             if (taobaoData.has("currentStage")) {
@@ -1115,6 +1116,7 @@ public class AntOrchard extends ModelTask {
                     int wateringCost = accountInfo.getInt("wateringCost");
                     spreadHappyPoint = happyPoint;
                     spreadWateringCost = wateringCost;
+                    com.surexu.sesame.util.FeatureStats.set("农场", "fertilizer", happyPoint);
                     int leftTimes = accountInfo.getInt("wateringLeftTimes");
                     int usedTimes = MAIN_SPREAD_DAILY_LIMIT - leftTimes;
 
@@ -1228,6 +1230,7 @@ public class AntOrchard extends ModelTask {
                     if (MessageUtil.checkResultCode(TAG, awardJo)) {
                         int awardCount = awardJo.getInt("incAwardCount");
                         Log.farm("芭芭农场🎁丰收礼包#获得[" + awardCount + "g肥料]");
+                        com.surexu.sesame.util.FeatureStats.add("农场", "gain", awardCount);
                     }
                 }
             }
@@ -1582,6 +1585,7 @@ public class AntOrchard extends ModelTask {
                         if (award.optString("itemId", "").equals(itemId)) {
                             int count = award.optInt("awardCount", 1);
                             Log.farm("芭芭农场🎁七日礼包#获得[" + count + "g肥料]");
+                            com.surexu.sesame.util.FeatureStats.add("农场", "gain", count);
                             Status.flagToday("orchardLotteryPlus", userId);
                             return;
                         }
@@ -1608,6 +1612,7 @@ public class AntOrchard extends ModelTask {
                     String takeResult = AntOrchardRpcCall.extraInfoSet();
                     if (MessageUtil.checkResultCode(TAG, new JSONObject(takeResult))) {
                         Log.farm("每日肥料💩[" + fertilizerNum + "g]");
+                        com.surexu.sesame.util.FeatureStats.add("农场", "gain", fertilizerNum);
                     }
                 }
             }

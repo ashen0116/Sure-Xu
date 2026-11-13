@@ -529,11 +529,24 @@ public class AntFarm extends ModelTask {
 
             //初始化AntFarmDrawMachineTaskListMap
             AntFarmDrawMachineTaskListMap.load();
-            // 注：游戏/开宝箱类不再预置拉黑，交由自动拉黑机制判定；
-            // "伸出援手 点亮希望"（需真实捐赠）与"消耗饲料换机会"（需消耗资源）保留
+            // 只拦需要真实花钱捐赠的任务；"消耗饲料换机会"按需求放开，交给 doFarmDrawTask 自动完成
+            // 服务端文案标点不固定（"伸出援手，点亮希望" / "伸出援手 点亮希望"），两种写法都登记；
+            // 运行时另有按关键字的硬拦截，见 isRealDonationTask
             blackList = new HashSet<>();
+            blackList.add("伸出援手，点亮希望");
             blackList.add("伸出援手 点亮希望");
-            blackList.add("消耗饲料换机会");
+
+            // 旧版本曾把"消耗饲料换机会"自动写进黑名单并落盘，这里无条件清一次，
+            // 否则用户本地配置里残留这一项，新版本仍会跳过它
+            ModelFields antFarmFields = ConfigV2.INSTANCE.getModelFieldsMap().get("AntFarm");
+            if (antFarmFields != null) {
+                SelectModelField drawTaskListField = (SelectModelField) antFarmFields.get("AntFarmDrawMachineTaskList");
+                if (drawTaskListField != null && drawTaskListField.getValue() != null
+                        && drawTaskListField.getValue().remove("消耗饲料换机会")) {
+                    ConfigV2.save(UserIdMap.getCurrentUid(), false);
+                    Log.record("抽抽乐♻️取消拉黑[消耗饲料换机会]");
+                }
+            }
 
             whiteList = new HashSet<>();// 从黑名单中移除该任务
             //whiteList.add("逛一逛树");
@@ -1043,6 +1056,7 @@ public class AntFarm extends ModelTask {
             double harvest = jo.getDouble("harvestBenevolenceScore");
             harvestBenevolenceScore = jo.getDouble("finalBenevolenceScore");
             Log.farm("收取鸡蛋🥚[" + harvest + "颗]#剩余" + harvestBenevolenceScore + "颗");
+            FeatureStats.add("庄园", "egg", harvest);
         } catch (Throwable t) {
             Log.err(TAG, "harvestProduce err:", t);
         }
@@ -1173,6 +1187,7 @@ public class AntFarm extends ModelTask {
             harvestBenevolenceScore = jo.getDouble("harvestBenevolenceScore");
             int donationTimesStat = jo.getInt("donationTimesStat");
             Log.farm("公益捐赠❤️[捐爱心蛋:" + activityName + "]捐赠" + donationAmount + "颗爱心蛋#累计捐赠" + donationTimesStat + "次");
+            FeatureStats.add("庄园", "donate", donationAmount);
             return true;
         } catch (Throwable t) {
             Log.err(TAG, "donation err:", t);
@@ -1892,6 +1907,7 @@ public class AntFarm extends ModelTask {
                 int feedFood = foodStock - jo.getInt("foodStock");
                 add2FoodStock(-feedFood);
                 Log.farm("投喂小鸡🥣消耗[" + feedFood + "g]#剩余[" + foodStock + "g饲料]");
+                FeatureStats.add("庄园", "feed", feedFood);
                 if (useAccelerateTool.getValue()) {
                     TimeUtil.sleep(1000);
                     useAccelerateTool();
@@ -3053,6 +3069,9 @@ public class AntFarm extends ModelTask {
         try {
             JSONObject jo = new JSONObject(AntFarmRpcCall.queryLoveCabin(UserIdMap.getCurrentUid()));
             if (MessageUtil.checkMemo(TAG, jo)) {
+                // "做任务得机会"那一栏是单独的次数任务列表（消耗饲料换机会等），
+                // 先把它跑完拿到抽奖次数，再进日场/IP 场抽奖
+                doFarmDrawTask("ANTFARM_DRAW_TIMES_TASK");
                 drawMachine("ANTFARM_DAILY_DRAW_TASK", "dailyDrawMachine", "ipDrawMachine");
 
                 JSONObject queryDrawMachineActivityjo = new JSONObject(AntFarmRpcCall.queryDrawMachineActivity("ipDrawMachine", "dailyDrawMachine"));
@@ -3115,13 +3134,44 @@ public class AntFarm extends ModelTask {
         }
     }
 
+    /** 需要真实花钱捐赠的抽抽乐任务：标题里的逗号、空格怎么写都拦得住 */
+    private boolean isRealDonationTask(String title) {
+        String plain = title.replaceAll("[^\\u4e00-\\u9fa5A-Za-z0-9]", "");
+        return plain.contains("伸出援手") || plain.contains("点亮希望");
+    }
+
+    /** 抽抽乐黑名单匹配：两边都去掉标点空白后再比，避免文案变体漏拦；短项仍要求完全一致 */
+    private boolean isDrawTaskBlocked(String title) {
+        String plain = title.replaceAll("[^\\u4e00-\\u9fa5A-Za-z0-9]", "");
+        if (plain.isEmpty()) {
+            return false;
+        }
+        java.util.Set<String> blocked = AntFarmDrawMachineTaskList.getValue();
+        if (blocked == null) {
+            return false;
+        }
+        for (String item : blocked) {
+            String plainItem = item.replaceAll("[^\\u4e00-\\u9fa5A-Za-z0-9]", "");
+            if (plainItem.isEmpty()) {
+                continue;
+            }
+            if (plain.equals(plainItem) || (plainItem.length() >= 4 && plain.contains(plainItem))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void doFarmDrawTask(String taskSceneCode) {
         try {
             JSONObject jo = new JSONObject(AntFarmRpcCall.listFarmDrawTask(taskSceneCode));
             if (!MessageUtil.checkMemo(TAG, jo)) {
                 return;
             }
-            JSONArray farmTaskList = jo.getJSONArray("farmTaskList");
+            JSONArray farmTaskList = jo.optJSONArray("farmTaskList");
+            if (farmTaskList == null) {
+                return;
+            }
             int total = farmTaskList.length();
             int received = 0, finished = 0, todo = 0, todoDone = 0, todoSkipped = 0;
             for (int i = 0; i < farmTaskList.length(); i++) {
@@ -3139,8 +3189,14 @@ public class AntFarm extends ModelTask {
                     receiveFarmDrawTaskAward(taskId, title, awardType, taskSceneCode);
                     continue;
                 }
-                //黑名单任务跳过
-                if (AntFarmDrawMachineTaskList.getValue().contains(title)) {
+                //需要真实花钱捐赠的任务一律不做，不依赖标题里逗号/空格的写法
+                if (isRealDonationTask(title)) {
+                    todoSkipped++;
+                    Log.farm("抽抽乐⏭️跳过[" + title + "]#需真实捐赠");
+                    continue;
+                }
+                //黑名单任务跳过（比较前先去掉标点空白，避免服务端文案变体漏拦）
+                if (isDrawTaskBlocked(title)) {
                     todoSkipped++;
                     Log.farm("抽抽乐⏭️跳过[" + title + "]#黑名单");
                     continue;
@@ -3184,7 +3240,10 @@ public class AntFarm extends ModelTask {
                         String bizKey = jo.optString("bizKey");
                         for (int j = 0; j < tryTimes; j++) {
                             JSONObject jofinishTask = new JSONObject(AntFarmRpcCall.finishTask(taskId, taskSceneCode));
-                            if (MessageUtil.checkSuccess(TAG, jofinishTask)) {
+                            // 400000040「不支持rpc调用」＝支付宝不让走这个老接口，
+                            // 脚本本来就会自动改走 doFarmTask，不算故障；静默切过去，别再刷一条吓人的错误
+                            if (!MessageUtil.isUnsupportedRpc(jofinishTask)
+                                    && MessageUtil.checkSuccess(TAG, jofinishTask)) {
                                 via = "finishTask";
                                 continue;
                             }

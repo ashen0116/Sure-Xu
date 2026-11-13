@@ -175,12 +175,12 @@ public final class AntOrchardGameStayTask {
             submitEvent(taskInfo.appId, "GAME_FIRST_FRAME", 0, "paladinx_auto");
             TimeUtil.sleep(500);
             submitEvent(taskInfo.appId, "loading_completed", 0, null);
-            int duration = Math.max(taskInfo.duration, 30);
-            int waitSeconds = RANDOM.nextInt(2) + 3;
-            Log.i(TAG, "[" + taskInfo.name + "]正在极速模拟游玩 (预计等待" + waitSeconds + "s)");
-            long waitMillis = waitSeconds * 1000L;
+            // 等待 / playTime(秒) / GAME_ELAPASED_TIME(毫秒) 三处同源，避免上报时间自相矛盾被判风险操作
+            int playSeconds = Math.max(taskInfo.duration, 30);
+            Log.i(TAG, "[" + taskInfo.name + "]正在模拟游玩 (预计等待" + playSeconds + "s)");
+            long waitMillis = playSeconds * 1000L;
             TimeUtil.sleep(waitMillis);
-            submitDuration(taskInfo.appId, duration);
+            submitDuration(taskInfo.appId, playSeconds);
             submitEvent(taskInfo.appId, "game_play", waitMillis, null);
             Log.i(TAG, "[" + taskInfo.name + "]极速游玩已完成，正在提交结项");
             JSONObject finishBody = new JSONObject();
@@ -206,7 +206,12 @@ public final class AntOrchardGameStayTask {
             Log.farm(TAG + "完成[" + taskInfo.name + "]任务获得肥料" + manure + "g");
             return manure;
         } catch (Throwable t) {
-            Log.i(TAG, "[" + taskInfo.name + "]执行异常:");
+            String reason = t.getClass().getSimpleName();
+            String msg = t.getMessage();
+            if (msg != null && !msg.isEmpty()) {
+                reason += ": " + msg;
+            }
+            Log.i(TAG, "[" + taskInfo.name + "]执行异常:" + reason);
             Log.printStackTrace(TAG, t);
             return -1;
         }

@@ -2,6 +2,8 @@ package com.surexu.sesame.model.task.antForest;
 
 import static com.surexu.sesame.model.normal.base.BaseModel.taskRpcRequest;
 
+import com.surexu.sesame.model.common.gamePlay.GameTaskRouter;
+
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -260,7 +262,6 @@ public class AntForestV2 extends ModelTask implements EnergyCollectCallback {
     private ChoiceModelField consumeAnimalPropType;
     private SelectModelField whoYouWantToGiveTo;
     private BooleanModelField ecoLife;
-    private BooleanModelField youthPrivilege;
     private SelectModelField ecoLifeOptions;
     private BooleanModelField dress;
     private BooleanModelField readForest;
@@ -373,7 +374,7 @@ public class AntForestV2 extends ModelTask implements EnergyCollectCallback {
         modelFields.addField(MonopolyTaskList = new SelectModelField("MonopolyTaskList", "新版保护地 | 黑名单列表", new LinkedHashSet<>(), AlipayMonopolyTaskList::getList).setDependsOn("AutoMonopolyTaskList"));
         modelFields.addField(consumeAnimalPropType = new ChoiceModelField("consumeAnimalPropType", "派遣动物伙伴", ConsumeAnimalPropType.NONE, ConsumeAnimalPropType.nickNames));
         modelFields.addField(receiveForestTaskAward = new BooleanModelField("receiveForestTaskAward", "森林任务",true));
-        modelFields.addField(energySceneTask = new BooleanModelField("energySceneTask", "种树攻略 | 场景任务",true)
+        modelFields.addField(energySceneTask = new BooleanModelField("energySceneTask", "种树攻略 | 场景任务", false)
                 .setDependsOn("receiveForestTaskAward")
                 .setDescription("逐个尝试完成场景卡下的行为子任务"));
         modelFields.addField(AutoAntForestVitalityTaskList = new BooleanModelField("AutoAntForestVitalityTaskList", "活力值 | 自动黑名单", true));
@@ -383,7 +384,6 @@ public class AntForestV2 extends ModelTask implements EnergyCollectCallback {
         modelFields.addField(greenLife = new BooleanModelField("greenLife", "森林集市",true));
         modelFields.addField(marketBrowseTask = new BooleanModelField("marketBrowseTask", "绿植浏览",true));
         modelFields.addField(greenRent = new BooleanModelField("greenRent", "绿色租赁",true));
-        modelFields.addField(youthPrivilege = new BooleanModelField("youthPrivilege", "青春特权 | 森林道具",true));
         modelFields.addField(ecoLife = new BooleanModelField("ecoLife", "绿色行动 | 开启",true));
         modelFields.addField(ecoLifeOptions = new SelectModelField("ecoLifeOptions", "绿色行动 | 选项", new LinkedHashSet<>(), CustomOption::getEcoLifeOptions, "光盘行动需要先手动完成一次").setDependsOn("ecoLife"));
         modelFields.addField(partnerteamWater = new BooleanModelField("partnerteamWater", "组队合种浇水", false));
@@ -472,10 +472,6 @@ public class AntForestV2 extends ModelTask implements EnergyCollectCallback {
                 ecoLife();
             }
 
-            if (youthPrivilege.getValue()) {
-                Privilege.youthPrivilege();
-                //Privilege.studentSignInRedEnvelope();
-            }
             //连续兑换使用道具卡片
             continuousUseCardOptions();
 
@@ -2638,6 +2634,8 @@ public class AntForestV2 extends ModelTask implements EnergyCollectCallback {
                         doubleCheck = true;
                     }
                 } else if (TaskStatus.TODO.name().equals(taskStatus)) {
+                    // 游戏类任务先上报游玩行为，再走下面的完成策略（成败一律以任务列表复核为准）
+                    GameTaskRouter.play("森林活力值", taskInfo);
                     //黑名单任务跳过
                     if (AntForestVitalityTaskList.getValue().contains(taskTitle)) {
                         continue;
@@ -2888,8 +2886,11 @@ public class AntForestV2 extends ModelTask implements EnergyCollectCallback {
             if (MessageUtil.isRetryable(jo) || MessageUtil.isServerBusy(jo)) {
                 return Outcome.RETRY;
             }
-            // 不支持rpc调用（400000040）→ 由 TaskAttemptPolicy 代为伪申报
+            // 不支持rpc调用（400000040）→ 先试几种有抓包依据的路子，都不成才交给伪申报兜底
             if (TaskAlternative.hit(jo, sceneCode)) {
+                if (trySceneTaskVariants(sceneCode, taskType, taskTitle)) {
+                    return Outcome.DONE;
+                }
                 return Outcome.UNSUPPORTED;
             }
             Log.forest("完成任务[" + taskTitle + "]失败");
@@ -2898,6 +2899,58 @@ public class AntForestV2 extends ModelTask implements EnergyCollectCallback {
             Log.err(TAG, "attemptSceneTask err:", t);
         }
         return Outcome.RETRY;
+    }
+
+    /**
+     * 场景卡子任务遇到 400000040 时的多路尝试（2026-11-11 试验补丁，把开关置 false 即完全回退）。
+     * <p>路子都来自本机抓包/现成代码，不是凭空猜：
+     * ① 能量雨游戏任务的「先 initTask 开局、再 finishTask」；
+     * ② 同一 finishTask 接口里 requestType=RPC 的抽奖任务实测能成功；
+     * ③ 列表接口 listTaskopengreen 用 chInfo_ch_appcenter__chsub_9patch 作 source。
+     * <p>硬交易/履约类一律不试（风控）。每条路子只发一次，日志标明是哪条通了；
+     * 响应 success 只算「疑似」，上层会重拉任务列表复核，列表没变下一轮照旧处理。
+     */
+    private static final boolean SCENE_TASK_VARIANT_TRIAL = true;
+
+    private boolean trySceneTaskVariants(String sceneCode, String taskType, String taskTitle) {
+        if (!SCENE_TASK_VARIANT_TRIAL || TaskAlternative.isTransactionTaskHard(taskType)) {
+            return false;
+        }
+        // ① 先开局再报完成
+        try {
+            JSONObject init = new JSONObject(AntForestRpcCall.initTask(taskType, sceneCode));
+            Log.forest("场景任务🧪开局[" + taskTitle + "] => " + TaskAlternative.describe(init));
+            TimeUtil.sleep(500);
+            JSONObject fin = new JSONObject(AntForestRpcCall.finishTask(sceneCode, taskType));
+            if (fin.optBoolean("success")) {
+                Log.forest("场景任务🧪✅开局+上报成功[" + taskTitle + "]#待列表复核");
+                return true;
+            }
+            TimeUtil.sleep(500);
+        } catch (Throwable t) {
+            Log.record("场景任务🧪开局异常[" + taskTitle + "]：" + t);
+        }
+        // ②③ 换 requestType / source
+        String[][] variants = {
+                {"RPC", "ANTFOREST"},
+                {"RPC", "chInfo_ch_appcenter__chsub_9patch"},
+                {"H5", "chInfo_ch_appcenter__chsub_9patch"},
+        };
+        for (String[] v : variants) {
+            try {
+                JSONObject r = new JSONObject(AntForestRpcCall.finishTask(sceneCode, taskType, v[0], v[1]));
+                boolean ok = r.optBoolean("success");
+                Log.forest("场景任务🧪变体[" + taskTitle + "]" + v[0] + "/" + v[1] + " => "
+                        + (ok ? "✅疑似成功#待列表复核" : "失败[" + TaskAlternative.describe(r) + "]"));
+                TimeUtil.sleep(500);
+                if (ok) {
+                    return true;
+                }
+            } catch (Throwable t) {
+                Log.record("场景任务🧪变体异常[" + taskTitle + "]：" + t);
+            }
+        }
+        return false;
     }
 
     private void startEnergyRain() {

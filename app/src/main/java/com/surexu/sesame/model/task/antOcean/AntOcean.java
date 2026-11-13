@@ -22,6 +22,7 @@ import com.surexu.sesame.model.normal.answerAI.AnswerAI;
 import com.surexu.sesame.model.task.antFarm.AntFarm.TaskStatus;
 import com.surexu.sesame.model.task.antFarm.AntFarmRpcCall;
 import com.surexu.sesame.model.task.antForest.AntForestRpcCall;
+import com.surexu.sesame.util.FeatureStats;
 import com.surexu.sesame.util.JsonUtil;
 import com.surexu.sesame.util.Log;
 import com.surexu.sesame.util.MessageUtil;
@@ -360,6 +361,7 @@ public class AntOcean extends ModelTask {
                                     int collectedEnergy = retBubble.getInt("collectedEnergy");
                                     Log.forest("神奇海洋🐳收取[" + UserIdMap.getMaskName(userId) + "]的海洋能量#" + collectedEnergy + "g");
                                     Statistics.addData(Statistics.DataType.COLLECTED, collectedEnergy);
+                                    FeatureStats.add("海洋", "energy", collectedEnergy);
                                 }
                             }
                             Statistics.save();
@@ -455,12 +457,19 @@ public class AntOcean extends ModelTask {
                 if (attachReward.length() > 0) {
                     Log.forest("神奇海洋🐳获得[" + name + "]拼图");
                     boolean canCombine = true;
+                    // 首页「海洋」卡的拼图数：按这次实际到手的块数累加
+                    int pieceCount = 0;
                     for (int j = 0; j < attachReward.length(); j++) {
                         JSONObject detail = attachReward.getJSONObject(j);
-                        if (detail.optInt("count", 0) == 0) {
+                        int count = detail.optInt("count", 0);
+                        if (count == 0) {
                             canCombine = false;
-                            break;
+                        } else {
+                            pieceCount += count;
                         }
+                    }
+                    if (pieceCount > 0) {
+                        FeatureStats.add("海洋", "puzzle", pieceCount);
                     }
                     if (canCombine && reward.optBoolean("unlock", false)) {
                         String fishId = reward.getString("id");
@@ -968,6 +977,14 @@ public class AntOcean extends ModelTask {
             if (MessageUtil.checkSuccess(TAG, jo)) {
                 String awardCount = jo.optString("incAwardCount");
                 Log.forest("海洋任务🎖️领取[" + taskTitle + "]奖励#获得[" + awardCount + "块拼图]");
+                try {
+                    double piece = Double.parseDouble(awardCount);
+                    if (piece > 0) {
+                        FeatureStats.add("海洋", "puzzle", piece);
+                    }
+                } catch (Throwable ignored) {
+                    // incAwardCount 不是数字时不统计
+                }
             }
         } catch (Throwable t) {
             Log.err(TAG, "receiveTaskAward err:", t);
@@ -1616,6 +1633,7 @@ public class AntOcean extends ModelTask {
                         String displayName = captureNickName.isEmpty() ? captureUserId : captureNickName;
                         Log.forest("海洋摸鱼🐟摸到了[" + displayName + "]的鱼获得" + popup.optInt("rightsNums", 0) + "g能量");
                         Toast.show("海洋摸鱼🐟获得" + popup.optInt("rightsNums", 0) + "g能量");
+                        FeatureStats.add("海洋", "fish", 1);
                     } else {
                         Log.forest("海洋摸鱼🐟[" + popup.optString("name", "") + "]" + popup.optInt("rightsNums", 0) + "g");
                         Toast.show("海洋摸鱼🐟获得" + popup.optInt("rightsNums", 0) + "g能量");
@@ -1623,6 +1641,7 @@ public class AntOcean extends ModelTask {
 
                     totalEnergy += energyGain;
                     Statistics.addData(Statistics.DataType.COLLECTED, energyGain);
+                    FeatureStats.add("海洋", "energy", energyGain);
                 }
 
                 // 更新剩余次数：仅当响应明确带回 myFish.interactVO 时才采用，否则视为无法继续，安全退出避免死循环

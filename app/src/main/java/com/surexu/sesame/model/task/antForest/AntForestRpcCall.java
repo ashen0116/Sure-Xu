@@ -247,16 +247,21 @@ public class AntForestRpcCall {
     
     /** 初始化/上报游戏任务 */
     public static String initTask(String taskType) {
+        return initTask(taskType, "ANTFOREST_ENERGY_RAIN_TASK");
+    }
+
+    /** 场景卡子任务试验：先开局再报完成，sceneCode 用服务端下发值。 */
+    public static String initTask(String taskType, String sceneCode) {
         // 生成类似 GAME_DONE_SLJYD_1769062463227_569cf36c 的 outBizNo
         String timestamp = String.valueOf(System.currentTimeMillis());
         String randomSuffix = java.util.UUID.randomUUID().toString().substring(0, 8);
         String outBizNo = taskType + "_" + timestamp + "_" + randomSuffix;
-        
+
         return ApplicationHook.requestString("com.alipay.antiep.initTask",
                 "[{" +
                 "  \"outBizNo\": \"" + outBizNo + "\"," +
                 "  \"requestType\": \"H5\"," +
-                "  \"sceneCode\": \"ANTFOREST_ENERGY_RAIN_TASK\"," +
+                "  \"sceneCode\": \"" + sceneCode + "\"," +
                 "  \"source\": \"ANTFOREST\"," +
                 "  \"taskType\": \"" + taskType + "\"" +
                 "}]");
@@ -268,8 +273,15 @@ public class AntForestRpcCall {
     }
     
     public static String finishTask(String sceneCode, String taskType) {
+        return finishTask(sceneCode, taskType, "H5", "ANTFOREST");
+    }
+
+    /** 场景卡子任务试验：只换 requestType / source，其余字段与原请求保持一致。 */
+    public static String finishTask(String sceneCode, String taskType, String requestType, String source) {
         String outBizNo = taskType + "_" + RandomUtil.nextDouble();
-        return ApplicationHook.requestString("com.alipay.antiep.finishTask", "[{\"outBizNo\":\"" + outBizNo + "\"," + "\"requestType\":\"H5\",\"sceneCode\":\"" + sceneCode + "\"," + "\"source\":\"ANTFOREST\",\"taskType\":\"" + taskType + "\"}]");
+        return ApplicationHook.requestString("com.alipay.antiep.finishTask", "[{\"outBizNo\":\"" + outBizNo + "\","
+                + "\"requestType\":\"" + requestType + "\",\"sceneCode\":\"" + sceneCode + "\","
+                + "\"source\":\"" + source + "\",\"taskType\":\"" + taskType + "\"}]");
     }
     
     public static String popupTask() {

@@ -133,11 +133,29 @@ public class NewRpcBridge implements RpcBridge {
                 count++;
                 try {
                     RpcIntervalLimit.enterIntervalLimit(method);
+                    String extraParams = buildExtraParams(relation);
+                    boolean isFacade = relation != null && relation.trim().startsWith("{");
+                    String engineFields = isFacade ? "" : ",\"apiCallLink\":\"XRiverNotFound\",\"execEngine\":\"XRiver\"";
                     newRpcCallMethod.invoke(
-                            newRpcInstance, method, false, false, "json", parseObjectMethod.invoke(null, "{\"__apiCallStartTime\":" + System.currentTimeMillis() + ",\"apiCallLink\":\"XRiverNotFound\",\"execEngine\":\"XRiver\",\"operationType\":\"" + method + "\",\"requestData\":" + data + (relation == null ? "" : ",\"relationLocal\":" + relation) + "}"), "", null, true, false, 0, false, "", null, null, null, Proxy.newProxyInstance(loader, bridgeCallbackClazzArray, new InvocationHandler() {
+                            newRpcInstance, method, false, false, "json", parseObjectMethod.invoke(null, "{\"__apiCallStartTime\":" + System.currentTimeMillis() + engineFields + ",\"operationType\":\"" + method + "\",\"requestData\":" + data + extraParams + "}"), "", null, true, false, 0, false, "", null, null, null, Proxy.newProxyInstance(loader, bridgeCallbackClazzArray, new InvocationHandler() {
                                 @Override
                                 public Object invoke(Object proxy, Method innerMethod, Object[] args) {
-                                    if (args.length == 1 && "sendJSONResponse".equals(innerMethod.getName())) {
+                                    String innerName = innerMethod.getName();
+                                    // hashCode/equals/toString 是代理对象被当 Map key 时 JVM 自动调的，
+                                    // 这里不拦就会走下面的 args.length 直接 NPE（args 为 null）
+                                    if (args == null || args.length == 0) {
+                                        if ("hashCode".equals(innerName)) {
+                                            return System.identityHashCode(proxy);
+                                        }
+                                        if ("toString".equals(innerName)) {
+                                            return "XuBridgeCallback@" + Integer.toHexString(System.identityHashCode(proxy));
+                                        }
+                                        return null;
+                                    }
+                                    if (args.length == 1 && "equals".equals(innerName)) {
+                                        return proxy == args[0];
+                                    }
+                                    if (args.length == 1 && "sendJSONResponse".equals(innerName)) {
                                         try {
                                             Object obj = args[0];
                                             rpcEntity.setResponseObject(obj, (String) XHelpers.callMethod(obj, "toJSONString"));
@@ -221,6 +239,22 @@ public class NewRpcBridge implements RpcBridge {
         }
     }
 
+    /**
+     * 拼装 params 里 operationType/requestData 之外的额外顶层字段。
+     * <p>relation 传 JSON 对象时(以 { 开头)当作 facade RPC 参数(appName/facadeName/methodName/getResponse 等)
+     * 合并进 params 顶层;否则维持旧的 relationLocal 行为。
+     */
+    private static String buildExtraParams(String relation) {
+        if (relation == null || relation.trim().isEmpty()) {
+            return "";
+        }
+        String t = relation.trim();
+        if (t.startsWith("{")) {
+            return "," + t.substring(1, t.length() - 1).trim();
+        }
+        return ",\"relationLocal\":" + relation;
+    }
+
     public RpcEntity newAsyncRequest(RpcEntity rpcEntity, int tryCount, int retryInterval) {
         if (ApplicationHook.isOffline()) {
             return null;
@@ -238,7 +272,21 @@ public class NewRpcBridge implements RpcBridge {
                                 newRpcInstance, method, false, false, "json", parseObjectMethod.invoke(null, "{\"__apiCallStartTime\":" + System.currentTimeMillis() + ",\"apiCallLink\":\"XRiverNotFound\",\"execEngine\":\"XRiver\",\"operationType\":\"" + method + "\",\"requestData\":" + args + "}"), "", null, true, false, 0, false, "", null, null, null, Proxy.newProxyInstance(loader, bridgeCallbackClazzArray, new InvocationHandler() {
                                     @Override
                                     public Object invoke(Object proxy, Method innerMethod, Object[] innerArgs) {
-                                        if (innerArgs.length == 1 && "sendJSONResponse".equals(innerMethod.getName())) {
+                                        String innerName = innerMethod.getName();
+                                        // 同上：hashCode/equals/toString 参数为空，不单独处理会 NPE
+                                        if (innerArgs == null || innerArgs.length == 0) {
+                                            if ("hashCode".equals(innerName)) {
+                                                return System.identityHashCode(proxy);
+                                            }
+                                            if ("toString".equals(innerName)) {
+                                                return "XuBridgeCallback@" + Integer.toHexString(System.identityHashCode(proxy));
+                                            }
+                                            return null;
+                                        }
+                                        if (innerArgs.length == 1 && "equals".equals(innerName)) {
+                                            return proxy == innerArgs[0];
+                                        }
+                                        if (innerArgs.length == 1 && "sendJSONResponse".equals(innerName)) {
                                             try {
                                                 synchronized (rpcEntity) {
                                                     Object obj = innerArgs[0];

@@ -12,6 +12,7 @@ import com.surexu.sesame.data.ConfigV2;
 import com.surexu.sesame.data.ModelFields;
 import com.surexu.sesame.data.modelFieldExt.SelectModelField;
 import com.surexu.sesame.model.base.TaskAlternative;
+import com.surexu.sesame.model.common.gamePlay.GamePlaySimulator;
 import com.surexu.sesame.util.Log;
 import com.surexu.sesame.util.MessageUtil;
 import com.surexu.sesame.util.idMap.GoldenBeansTaskListMap;
@@ -235,6 +236,7 @@ public final class GoldenBeansTasks {
 
             int total = 0;
             int handled = 0;
+            int gamePlayed = 0;
             boolean changed = false;
             for (int i = 0; i < taskList.length(); i++) {
                 JSONObject task = taskList.optJSONObject(i);
@@ -252,8 +254,10 @@ public final class GoldenBeansTasks {
                 String blacklistKey = blacklistKey(task);
                 String taskName = displayName(task);
 
-                // 黑名单任务跳过；已完成待领取的仍执行领奖，兼容以标题为键的旧黑名单项
-                if (isBlacklisted(blacklistKey, taskName)) {
+                // 黑名单里的游戏任务放出来重新验证：先假玩，再走完成 + 领奖
+                boolean blacklisted = isBlacklisted(blacklistKey, taskName);
+                boolean retryGame = blacklisted && isGameTaskName(taskName, task);
+                if (blacklisted && !retryGame) {
                     if (STATUS_FINISHED.equals(taskStatus) || STATUS_TO_RECEIVE.equals(taskStatus)) {
                         GoldenBeansSupport.pause(interval);
                         // 领奖失败要计入未完成，下轮还会重试（与下面非黑名单分支保持一致）
@@ -295,9 +299,30 @@ public final class GoldenBeansTasks {
                         continue;
                     }
                     GoldenBeansSupport.pause(interval);
+                    if (retryGame) {
+                        boolean played = GamePlaySimulator.playForTask("金豆夺宝", task,
+                                GamePlaySimulator.Scene.GENERIC, gamePlayed);
+                        if (played) {
+                            gamePlayed++;
+                        }
+                        Log.record("金豆[" + entry.alias + "]🎮黑名单游戏任务重新验证["
+                                + taskName + "]#假玩=" + played);
+                    }
                     if (finishTask(entry, taskId, taskName)) {
                         handled++;
                         changed = true;
+                        if (retryGame) {
+                            // 本轮直接把奖励也领了，日志里一次看清「假玩 → 完成 → 领奖」通不通
+                            GoldenBeansSupport.pause(interval);
+                            if (claimAward(entry, taskId, taskName)) {
+                                Log.record("金豆[" + entry.alias + "]🎁黑名单游戏任务领奖成功["
+                                        + taskName + "]");
+                            } else {
+                                Log.record("金豆[" + entry.alias + "]⚠️黑名单游戏任务领奖失败["
+                                        + taskName + "]");
+                                unresolved = true;
+                            }
+                        }
                     } else {
                         Log.record("金豆[" + entry.alias + "]任务⚠️[" + taskName + "]完成失败["
                                 + (actionType.isEmpty() ? "UNKNOWN" : actionType) + "]");
@@ -326,6 +351,15 @@ public final class GoldenBeansTasks {
             return false;
         }
         return !unresolved;
+    }
+
+    /** 黑名单里哪些算「游戏任务」：标题带玩/游戏/试玩，或任务里能解析出游戏 id */
+    private boolean isGameTaskName(String taskName, JSONObject task) {
+        if (taskName != null && (taskName.contains("玩") || taskName.contains("游戏")
+                || taskName.contains("试玩") || taskName.contains("小游戏"))) {
+            return true;
+        }
+        return GamePlaySimulator.isGameTask(task);
     }
 
     private boolean isBlacklisted(String blacklistKey, String taskName) {
@@ -388,8 +422,17 @@ public final class GoldenBeansTasks {
                 return true;
             }
             String failMessage = GoldenBeansSupport.describe(jo);
-            // 另一种实现方案（见 TaskAlternative）；乐园游戏类任务会被 finishTaskantorchard 以 400000040 拒绝
-            if (TaskAlternative.hit(jo, entry.taskSceneCode)) {
+            // 游戏任务的完成方式不止一种：直报没过时别急着拉黑，再换 doFarmTask 伪申报试一次，
+            // 最后都以任务列表复核为准。实测很多游戏任务回的是 VISIT 这种软失败，
+            // 以前非要命中 400000040 才换方案，白白漏掉了大半。
+            boolean gameLike = taskName != null
+                    && (taskName.contains("玩") || taskName.contains("游戏") || taskName.contains("试玩"));
+            boolean altHit = TaskAlternative.hit(jo, entry.taskSceneCode);
+            if (gameLike || altHit) {
+                if (gameLike && !altHit) {
+                    Log.goldenBeans("金豆[" + entry.alias + "]🎮[" + taskName
+                            + "]直报没过，换备用方案再试一次#" + failMessage);
+                }
                 TaskAlternative.trigger(pendingVerifyTasks, taskId, taskName, taskId, entry.taskSceneCode,
                         goldenbeansRpcCall.VERSION, "金豆[" + entry.alias + "]任务", msg -> Log.goldenBeans(msg));
                 return false;

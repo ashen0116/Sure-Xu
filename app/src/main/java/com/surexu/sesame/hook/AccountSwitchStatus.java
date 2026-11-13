@@ -11,6 +11,7 @@ import org.json.JSONObject;
 public final class AccountSwitchStatus {
     private static String last;
     private static long lastWrite;
+    private static long lastNextAt = -1L;
 
     private AccountSwitchStatus() {
     }
@@ -20,18 +21,27 @@ public final class AccountSwitchStatus {
     }
 
     static void publish(String str) {
+        publish(str, -1L);
+    }
+
+    /** 带下次切号时间落盘：界面直接读 nextAt 显示「下次切号时间 16:35」 */
+    static void publish(String str, long nextAt) {
         try {
             if (message(str) == null) {
                 return;
             }
-            long jCurrentTimeMillis = System.currentTimeMillis();
-            if (!str.equals(last) || jCurrentTimeMillis - lastWrite >= 30000) {
+            long now = System.currentTimeMillis();
+            if (!str.equals(last) || nextAt != lastNextAt || now - lastWrite >= 30000) {
                 JSONObject jSONObject = new JSONObject();
                 jSONObject.put("phase", str);
-                jSONObject.put("updatedAt", jCurrentTimeMillis);
+                jSONObject.put("updatedAt", now);
+                if (nextAt > 0) {
+                    jSONObject.put("nextAt", nextAt);
+                }
                 writeAll(file(), jSONObject.toString());
                 last = str;
-                lastWrite = jCurrentTimeMillis;
+                lastNextAt = nextAt;
+                lastWrite = now;
             }
         } catch (Throwable unused) {
         }

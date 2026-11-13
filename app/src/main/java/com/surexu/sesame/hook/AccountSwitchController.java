@@ -406,7 +406,9 @@ public final class AccountSwitchController {
 
     private static void phase(String str) {
         try {
-            AccountSwitchStatus.publish(str);
+            // 倒计时用的是开机计时，换算成真实时钟再落盘，首页才能显示具体的「下次切号时间」
+            AccountSwitchStatus.publish(str,
+                    STATE.nextSwitchWallTime(AccountSwitchSettings.read().seconds));
         } catch (Throwable unused) {
         }
     }
