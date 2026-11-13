@@ -29,7 +29,7 @@ public final class YouthPrivilege extends IsolatedRewardTask {
 
     @Override
     protected void execute(IsolatedRewardTask.Run run) throws Exception {
-        JSONObject jSONObjectOptJSONObject = run.query("alipay.membertangram.biz.rpc.student.queryCheckInModel", "[{\"chInfo\":\"ch_appcenter__chsub_9patch\",\"skipTaskModule\":false}]").optJSONObject("studentCheckInInfo");
+        JSONObject jSONObjectOptJSONObject = run.query("com.alipay.mobileopl.youthprivilege.rpc.mgw.queryCheckInModel", "[{\"chInfo\":\"ch_appcenter__chsub_9patch\",\"queryAd\":true,\"skipTaskModule\":false}]").optJSONObject("studentCheckInInfo");
         if (jSONObjectOptJSONObject == null) {
             Log.record(getName() + "：未返回签到状态，本轮结束");
             return;
@@ -42,7 +42,7 @@ public final class YouthPrivilege extends IsolatedRewardTask {
             Log.record(getName() + "：可签到，领取开关未开启");
             return;
         }
-        if (run.onceToday("checkIn", "alipay.membertangram.biz.rpc.student.checkIn", "[{\"source\":\"ch_appcenter__chsub_9patch\"}]", new IsolatedRewardTask.Allowed() {
+        if (run.onceToday("checkIn", "com.alipay.mobileopl.youthprivilege.rpc.mgw.checkIn", "[{\"chInfo\":\"ch_appcenter__chsub_9patch\"}]", new IsolatedRewardTask.Allowed() {
             @Override
             public final boolean isAllowed() {
                 return YouthPrivilege.this.checkIn.getValue().booleanValue();
