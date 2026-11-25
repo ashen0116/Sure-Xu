@@ -56,16 +56,24 @@ public class YouthPrivilegeTasks extends ModelTask {
     private static final String RPC_EXCHANGE = PREFIX + "exchange";
     private static final String RPC_LOTTERY = PREFIX + "queryLotteryEntrance";
 
-    /** 任务「做完」的几条候选通道，按服务端下发的字段现拼参数，不写死任务号。 */
+    /**
+     * 完成上报只保留一条通道：{@code com.alipay.pcreditbfweb.sdk.task.trigger}（stage=send）。
+     *
+     * <p>2026-11-25 收敛依据（当天 runtime 日志，84 次探测 / 17 次报名）：
+     * <ul>
+     *   <li>报名：{@code taskSignUp} 回 success/SUCCESS；{@code trigger(stage=signup)} 恒失败
+     *       （10002903 / 10001031 / 10000023），已删除；</li>
+     *   <li>完成：6 条候选里只有 trigger(send) 回 {@code success=true,data=true}；
+     *       {@code promoprod.applet.trigger} 恒 10002901「任务报名记录不存在或已过期」、
+     *       {@code promoprod.task.complete.notice} 恒空数组、
+     *       {@code needle.taskDirectPrize.complete} 恒 TASK_COMPLETE_ERROR、
+     *       {@code antiep.finishTask} 恒「参数缺失」、{@code taskComplete} 恒 TASK_OPERATE_ERROR，
+     *       全部删除；</li>
+     *   <li>84 次探测里 currentCount 一次都没涨，需页面真实上报才有可能进账，
+     *       所以不再盲试，进不动就落一条结论日志收手。</li>
+     * </ul>
+     */
     private static final String RPC_SDK_TRIGGER = "com.alipay.pcreditbfweb.sdk.task.trigger";
-    private static final String RPC_PROMO_TRIGGER = "alipay.promoprod.applet.trigger";
-    private static final String RPC_COMPLETE_NOTICE = "alipay.promoprod.task.complete.notice";
-    private static final String RPC_DIRECT_COMPLETE = "com.alipay.fundscenebff.needle.taskDirectPrize.complete";
-    private static final String RPC_ANTIEP_FINISH = "com.alipay.antiep.finishTask";
-    private static final String RPC_TASK_COMPLETE = PREFIX + "taskComplete";
-
-    private static final String ROUTE_KEY = "youthPrivilege::completeRoute";
-    private static final int ROUTE_COUNT = 6;
 
     private static final String CH = "ch_appcenter__chsub_9patch";
     private static final String TASK_QUERY = "[{\"chInfo\":\"" + CH + "\",\"skipTaskList\":false}]";
@@ -76,6 +84,10 @@ public class YouthPrivilegeTasks extends ModelTask {
     private BooleanModelField exchangeBenefit;
     private SelectModelField exchangeList;
     private BooleanModelField claimProps;
+
+    /** queryProgress 顺手带回来的状态，用来判定「已完成」——supportProgress=false 的任务计数不会涨 */
+    private String lastTaskStatus = "";
+    private String lastTaskAction = "";
 
     @Override
     public String getName() {
@@ -215,19 +227,30 @@ public class YouthPrivilegeTasks extends ModelTask {
                 int current = task.optInt("currentCount", 0);
                 int total = Math.max(1, task.optInt("totalCount", 1));
                 if (current >= total || isFinished(status)) {
-                    Log.record(getName() + "✅任务[" + name + "]已完成 " + current + "/" + total);
+                    if (current >= total) {
+                        Log.record(getName() + "✅任务[" + name + "]次数已做满 " + current + "/" + total);
+                    } else {
+                        // 实测常见：服务端 status 已给完成态但 currentCount 仍是 0，属于已领取/已结算，别再重试
+                        Log.record(getName() + "⏭️任务[" + name + "]服务端已结算 进度" + current + "/" + total
+                                + " 状态=" + status);
+                    }
                     continue;
                 }
                 Log.record(getName() + "👀任务[" + name + "] " + current + "/" + total
                         + " 状态=" + status + "/" + action);
                 Log.record(getName() + "任务原始内容：" + clip(task.toString()));
                 Log.debug(getName() + "任务原始内容：" + task);
+                lastTaskStatus = "";
+                lastTaskAction = "";
                 int after = completeWithRoutes(task, current, total);
-                if (after > current) {
+                // 计数不涨但状态翻 COMPLETE 也算做成（supportProgress=false 的任务就是这种）
+                if (after > current || isFinished(lastTaskStatus)) {
                     done++;
-                    Log.record(getName() + "🎉任务[" + name + "]进度 " + current + "→" + after + "/" + total);
+                    Log.record(getName() + "🎉任务[" + name + "]完成 进度 " + current + "→" + after + "/" + total
+                            + " 状态=" + lastTaskStatus);
                 } else {
-                    Log.record(getName() + "❌任务[" + name + "]进度没涨，仍是 " + after + "/" + total);
+                    Log.record(getName() + "❌任务[" + name + "]没做成 进度 " + after + "/" + total
+                            + " 状态=" + lastTaskStatus);
                 }
             }
             Log.record(getName() + "✅本轮做成 " + done + "/" + tasks.length() + " 个任务");
@@ -280,18 +303,17 @@ public class YouthPrivilegeTasks extends ModelTask {
     }
 
     /**
-     * 一次一次把次数做满：每次先打开链接停留，再依次试几条「报完成」的路子；
-     * 每报一次都重拉任务列表看 currentCount 有没有涨，涨了才算数。
+     * 一次一次把次数做满：每次先报名、打开链接停留，再发一次 trigger/send，然后重拉列表复核。
+     * 复核只用两次查询（停留后一次、上报后一次），不再为每条盲试通道各查一遍。
      */
     private int completeWithRoutes(JSONObject task, int current, int total) {
         String code = task.optString("taskCode", "");
         String url = task.optString("taskUrl", "");
         int stay = browseStay == null || browseStay.getValue() == null ? 16 : browseStay.getValue();
-        int known = Status.getIntFlagToday(ROUTE_KEY);
         int now = current;
         for (int round = current; round < total; round++) {
             // 2026-11-13 实测：直接报完成会回 10002901「任务报名记录不存在或已过期」，
-            // 报名记录有时效，每做一次之前都要重新报名，且和完成上报共用同一个流水号。
+            // 报名记录有时效，每做一次之前都要重新报名。
             signupForRound(task);
             if (!url.isEmpty() && openUrl(url)) {
                 TimeUtil.sleep(stay * 1000L);
@@ -299,61 +321,36 @@ public class YouthPrivilegeTasks extends ModelTask {
                 Log.record(getName() + "⚠️任务没有跳转链接，直接试完成上报");
             }
             now = queryProgress(code, now);
-            if (now > round) {
-                Log.record(getName() + "✅页面自己记了完成，进度 " + now);
-                continue;
-            }
-            boolean advanced = false;
-            for (int pass = 0; pass < 2 && !advanced; pass++) {
-                for (int r = 1; r <= ROUTE_COUNT && !advanced; r++) {
-                    if (known > 0 && ((pass == 0 && r != known) || (pass == 1 && r == known))) {
-                        continue;
-                    }
-                    if (known == 0 && pass == 1) {
-                        break;
-                    }
-                    String[] route = completeRoute(r, task);
-                    if (route == null) {
-                        continue;
-                    }
-                    String resp = requestRaw(route[0], route[1]);
-                    Log.record(getName() + "🔍路子" + r + "[" + route[0] + "] " + brief(resp));
-                    Log.record(getName() + "🔍路子" + r + " 参数：" + clip(route[1])
-                            + " 响应：" + clip(resp));
-                    Log.debug(getName() + "🔍路子" + r + " 参数：" + route[1] + " 完整响应：" + resp);
-                    int after = queryProgress(code, now);
-                    if (after > now) {
-                        now = after;
-                        known = r;
-                        Status.setIntFlagToday(ROUTE_KEY, r);
-                        Log.record(getName() + "🎯路子" + r + "有效，进度→" + now);
-                        advanced = true;
-                    }
-                }
-            }
-            if (!advanced) {
-                Log.record(getName() + "⏹️几条路子都试过，进度没涨，本轮先停");
+            if (now > round || isFinished(lastTaskStatus)) {
+                Log.record(getName() + "✅页面自己记了完成，进度 " + now
+                        + " 状态=" + lastTaskStatus + "/" + lastTaskAction);
                 break;
             }
+            String resp = requestRaw(RPC_SDK_TRIGGER, triggerArgs(task, "send"));
+            Log.record(getName() + "🔍上报[trigger/send] " + brief(resp));
+            Log.debug(getName() + "🔍上报参数：" + triggerArgs(task, "send") + " 响应：" + resp);
+            int after = queryProgress(code, now);
+            // 实测：supportProgress=false 的任务计数恒为 0，完成标志是 taskStatus 翻 COMPLETE，
+            // 所以两个判据都要看，否则做成了也会被判失败、继续白试其它通道。
+            if (after > now || isFinished(lastTaskStatus)) {
+                now = Math.max(after, now);
+                Log.record(getName() + "🎯trigger/send 生效，进度→" + now
+                        + " 状态=" + lastTaskStatus + "/" + lastTaskAction);
+                break;
+            }
+            Log.record(getName() + "⏹️trigger/send 已受理但状态没翻完成，本轮收手"
+                    + " 状态=" + lastTaskStatus + "/" + lastTaskAction);
+            break;
         }
-        return queryProgress(code, now);
+        return now;
     }
 
-    /** 每次完成前补报名：两条通道都试，服务端认哪条算哪条 */
+    /** 每次完成前补报名：只走 taskSignUp（trigger/stage=signup 实测恒失败，已删） */
     private void signupForRound(JSONObject task) {
-        String code = task.optString("taskCode", "");
-        String cent = task.optString("taskCentId", "");
-        String outBizNo = code + today();
         String signupArgs = signupData(task);
         String a = requestRaw(RPC_SIGNUP, signupArgs);
-        String triggerArgs = "[{\"appletId\":\"" + code + "\",\"extInfo\":{},\"needleParam\":{},"
-                + "\"outBizNo\":\"" + outBizNo + "\",\"retryFlag\":true,"
-                + "\"stageCode\":\"signup\",\"taskCenId\":\"" + cent + "\"}]";
-        String b = requestRaw(RPC_SDK_TRIGGER, triggerArgs);
-        Log.record(getName() + "📋报名A[taskSignUp] " + brief(a)
-                + " ｜ 报名B[trigger/signup] " + brief(b));
-        Log.debug(getName() + "📋报名A 参数：" + signupArgs + " 响应：" + a
-                + " ｜ 报名B 参数：" + triggerArgs + " 响应：" + b);
+        Log.record(getName() + "📋报名[taskSignUp] " + brief(a));
+        Log.debug(getName() + "📋报名参数：" + signupArgs + " 响应：" + a);
     }
 
     /** 重拉列表，看某个任务当前做了几次；查不到就返回原值，绝不假装涨了 */
@@ -366,52 +363,24 @@ public class YouthPrivilegeTasks extends ModelTask {
         for (int i = 0; i < tasks.length(); i++) {
             JSONObject t = tasks.optJSONObject(i);
             if (t != null && code.equals(t.optString("taskCode", ""))) {
+                lastTaskStatus = t.optString("taskStatus", "");
+                lastTaskAction = t.optString("taskAction", "");
                 int c = t.optInt("currentCount", fallback);
                 Log.record(getName() + "🔄复核[" + t.optString("taskName", code) + "]进度=" + c
-                        + " 状态=" + t.optString("taskStatus", "") + "/" + t.optString("taskAction", ""));
+                        + " 状态=" + lastTaskStatus + "/" + lastTaskAction);
                 return c;
             }
         }
         return fallback;
     }
 
-    /** 几条候选通道，参数全部取自服务端下发的任务内容 */
-    private String[] completeRoute(int route, JSONObject task) {
+    /** trigger 参数：报名和完成共用同一个流水号（taskCode + 日期） */
+    private static String triggerArgs(JSONObject task, String stageCode) {
         String code = task.optString("taskCode", "");
         String cent = task.optString("taskCentId", "");
-        String source = task.optString("taskSource", "PROMOKERNEL");
-        String type = task.optString("taskType", "BROWSER");
-        String outBizNo = code + today();
-        switch (route) {
-            case 1:
-                return new String[]{RPC_SDK_TRIGGER,
-                        "[{\"appletId\":\"" + code + "\",\"extInfo\":{},\"needleParam\":{},"
-                                + "\"outBizNo\":\"" + outBizNo + "\",\"retryFlag\":true,"
-                                + "\"stageCode\":\"send\",\"taskCenId\":\"" + cent + "\"}]"};
-            case 2:
-                return new String[]{RPC_PROMO_TRIGGER,
-                        "[{\"appletId\":\"" + code + "\",\"chInfo\":\"" + CH + "\","
-                                + "\"outbizno\":\"" + outBizNo + "\",\"stageCode\":\"send\","
-                                + "\"taskCenInfo\":\"" + cent + "\"}]"};
-            case 3:
-                return new String[]{RPC_COMPLETE_NOTICE,
-                        "[{\"chInfo\":\"" + CH + "\",\"taskCenInfo\":\"" + cent
-                                + "\",\"taskCenInfos\":[\"" + cent + "\"]}]"};
-            case 4:
-                return new String[]{RPC_DIRECT_COMPLETE,
-                        "[{\"taskCenId\":\"" + cent + "\",\"taskId\":\"" + code + "\"}]"};
-            case 5:
-                return new String[]{RPC_ANTIEP_FINISH,
-                        "[{\"sceneCode\":\"" + cent + "\",\"taskType\":\"" + type
-                                + "\",\"outBizNo\":\"" + outBizNo + "\"}]"};
-            case 6:
-                return new String[]{RPC_TASK_COMPLETE,
-                        "[{\"taskCode\":\"" + code + "\",\"taskCentId\":\"" + cent
-                                + "\",\"taskSource\":\"" + source + "\",\"taskType\":\"" + type
-                                + "\",\"chInfo\":\"" + CH + "\"}]"};
-            default:
-                return null;
-        }
+        return "[{\"appletId\":\"" + code + "\",\"extInfo\":{},\"needleParam\":{},"
+                + "\"outBizNo\":\"" + code + today() + "\",\"retryFlag\":true,"
+                + "\"stageCode\":\"" + stageCode + "\",\"taskCenId\":\"" + cent + "\"}]";
     }
 
     private static String signupData(JSONObject task) {
@@ -553,20 +522,8 @@ public class YouthPrivilegeTasks extends ModelTask {
         return null;
     }
 
-    /** 在支付宝进程内打开 alipays:// 链接 */
+    /** 打开 alipays:// 链接（统一走静默闸门；禁止打开页面时返回 false，调用方直接走协议上报） */
     private boolean openUrl(String url) {
-        try {
-            Context ctx = ApplicationHook.getContext();
-            if (ctx == null || url.isEmpty()) {
-                return false;
-            }
-            Intent intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            ctx.startActivity(intent);
-            return true;
-        } catch (Throwable t) {
-            Log.record(getName() + "打开链接失败：" + t.getClass().getSimpleName());
-            return false;
-        }
+        return com.surexu.sesame.util.PageOpenGate.open(ApplicationHook.getContext(), url, getName());
     }
 }

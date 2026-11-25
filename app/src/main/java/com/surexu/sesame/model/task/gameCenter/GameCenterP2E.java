@@ -755,21 +755,9 @@ public class GameCenterP2E extends ModelTask {
                 + " 种形状均未通过，今日不再重复申报");
     }
 
-    /** 在支付宝进程内打开 alipays:// 链接 */
+    /** 打开 alipays:// 链接（统一走静默闸门；禁止打开页面时返回 false，调用方直接走协议上报） */
     private boolean openUrl(String url) {
-        try {
-            Context ctx = ApplicationHook.getContext();
-            if (ctx == null || url.isEmpty()) {
-                return false;
-            }
-            Intent intent = Intent.parseUri(url, Intent.URI_INTENT_SCHEME);
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            ctx.startActivity(intent);
-            return true;
-        } catch (Throwable t) {
-            Log.record(getName() + "打开链接失败：" + t.getClass().getSimpleName());
-            return false;
-        }
+        return com.surexu.sesame.util.PageOpenGate.open(ApplicationHook.getContext(), url, getName());
     }
 
     /** 当天日期 yyyy-MM-dd，签到参数 fallback 用 */
