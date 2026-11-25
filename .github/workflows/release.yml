@@ -90,16 +90,17 @@ jobs:
       - name: Upload signed assets to Release
         uses: softprops/action-gh-release@v3
         with:
-          name: ${{ github.event.release.tag_name }}
+          # tag 推送触发时 github.event.release 为空，用 ref_name 兜底
+          name: ${{ github.event.release.tag_name || github.ref_name }}
           files: release-signed/*
-          tag_name: ${{ github.ref_name }}
+          tag_name: ${{ github.event.release.tag_name || github.ref_name }}
           draft: false
           append_body: true
           generate_release_notes: true
           body: |
             ## ✨What's Changed
 
-            ${{ github.event.head_commit.message || github.event.pull_request.title || '无详细信息' }}
+            ${{ github.event.head_commit.message || github.event.release.body || '无详细信息' }}
             > ## 下载说明
               * Normal 为单包通吃版：基于 libxposed API 102（LSPosed 等免 Root 框架）+ 传统 Xposed API 82~93（Root / 传统框架）双入口，安装一个即可
               * 要求`Android 8.0`(API 26)及以上系统
