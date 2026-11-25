@@ -1,8 +1,13 @@
 name: Android CI
 
 on:
+  # 实测：本仓库的 release: published 事件不会被投递（v3.4.1 / v3.4.2 两次发布均为 0 run），
+  # 而 push 与 tag 推送都正常，所以主触发改为 tag 推送，release 事件保留作兜底。
+  push:
+    tags: ['v*']
   release:
     types: [published]
+  workflow_dispatch:
 
 jobs:
   build:
