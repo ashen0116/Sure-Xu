@@ -866,6 +866,8 @@ public class ApplicationHook {
         JsBridgeHook.install(cl, processName);
         // 侦察探针: 定位游戏方服务器域名/WebView 资源(只读, 不改任何流量)
         installNetProbeHooks(cl);
+        // 页面地址探针: XRiver/Nebula 打开 H5 时把 Intent 的 url/extras 写进抓包记录(只读)
+        PageUrlProbe.install(cl, processName);
     }
 
     /**
