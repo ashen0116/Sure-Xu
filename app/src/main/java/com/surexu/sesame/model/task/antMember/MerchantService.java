@@ -200,8 +200,14 @@ public class MerchantService {
             JSONObject jo = new JSONObject(MerchantServiceRpcCall.KMDKQueryActivity());
             if (!MessageUtil.checkSuccess(TAG, jo)) {
                 return;
-            } if (Objects.equals("SIGN_IN_ENABLE", jo.getString("signInStatus"))) {
-                String activityNo = jo.getString("activityNo");
+            }
+            // 接口字段探测：服务端偶发不返回 signInStatus/activityNo（曾抛 “No value for signInStatus”）
+            if (!jo.has("activityNo")) {
+                Log.i(TAG, "开门打卡接口未返回 activityNo，本轮跳过");
+                return;
+            }
+            if (Objects.equals("SIGN_IN_ENABLE", jo.optString("signInStatus"))) {
+                String activityNo = jo.optString("activityNo");
                 jo = new JSONObject(MerchantServiceRpcCall.KMDKSignIn(activityNo));
                 if (MessageUtil.checkResultCode(TAG, jo)) {
                     Log.other("商家服务🏪[开门打卡签到成功]");
@@ -220,13 +226,16 @@ public class MerchantService {
                 JSONObject jo = new JSONObject(MerchantServiceRpcCall.KMDKQueryActivity());
                 if (!MessageUtil.checkSuccess(TAG, jo)) {
                     continue;
-                } String activityNo = jo.getString("activityNo");
-                if (!Log.getFormatDate().replace("-", "").equals(activityNo.split("_")[2])) {
+                } if (!jo.has("activityNo")) {
+                    Log.i(TAG, "开门打卡接口未返回 activityNo，本轮跳过");
                     break;
-                } else if (Objects.equals("SIGN_UP", jo.getString("signUpStatus"))) {
+                } String activityNo = jo.optString("activityNo");
+                if (!Log.getFormatDate().replace("-", "").equals(activityNo.split("_").length > 2 ? activityNo.split("_")[2] : "")) {
+                    break;
+                } else if (Objects.equals("SIGN_UP", jo.optString("signUpStatus"))) {
                     Log.record("开门打卡今日已报名！"); hasSignUp = true; break;
-                } else if (Objects.equals("UN_SIGN_UP", jo.getString("signUpStatus"))) {
-                    String activityPeriodName = jo.getString("activityPeriodName");
+                } else if (Objects.equals("UN_SIGN_UP", jo.optString("signUpStatus"))) {
+                    String activityPeriodName = jo.optString("activityPeriodName");
                     jo = new JSONObject(MerchantServiceRpcCall.KMDKSignUp(activityNo));
                     if (MessageUtil.checkSuccess(TAG, jo)) {
                         Log.other("商家服务🏪报名[" + activityPeriodName + "开门打卡]");

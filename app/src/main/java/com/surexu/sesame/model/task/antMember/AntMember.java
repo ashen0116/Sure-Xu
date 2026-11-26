@@ -1822,13 +1822,30 @@ public class AntMember extends BaseAntMember {
             if (!jsonObject.has("data")) {
                 return;
             }
-            JSONArray taskModuleList = jsonObject.getJSONObject("data").getJSONArray("taskModuleList");
-            for (int i = 0; i < taskModuleList.length(); i++) {
-                JSONObject moduleObj = taskModuleList.getJSONObject(i);
-                JSONArray taskList = moduleObj.getJSONArray("taskList");
-                for (int j = 0; j < taskList.length(); j++) {
-                    processTask(taskList.getJSONObject(j));
+            JSONObject data = jsonObject.optJSONObject("data");
+            JSONArray taskModuleList = data == null ? null : data.optJSONArray("taskModuleList");
+            int processed = 0;
+            if (taskModuleList != null) {
+                for (int i = 0; i < taskModuleList.length(); i++) {
+                    JSONObject moduleObj = taskModuleList.optJSONObject(i);
+                    JSONArray taskList = moduleObj == null ? null : moduleObj.optJSONArray("taskList");
+                    if (taskList == null) {
+                        continue;
+                    }
+                    for (int j = 0; j < taskList.length(); j++) {
+                        JSONObject task = taskList.optJSONObject(j);
+                        if (task == null) {
+                            continue;
+                        }
+                        processTask(task);
+                        processed++;
+                    }
                 }
+            }
+            // 该接口现在可能只返回 gameTaskModule（v4 结构）或干脆不返回任务字段，
+            // 这里不再用 getJSONArray 硬取，避免每轮抛 “No value for taskModuleList”。
+            if (processed == 0) {
+                Log.i(TAG, "queryModularTaskList 无 taskModuleList 任务，本轮跳过");
             }
             // 核对本轮 doFarmTask 的结果（响应不可信，以任务列表为准）
             verifyPendingTasks();

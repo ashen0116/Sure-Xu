@@ -159,11 +159,9 @@ public abstract class BaseAntMember extends ModelTask {
         if (Status.hasFlagToday(FLAG_SIGN_PAGE_TASK_FAILED)) {
             return null;
         }
-        // 当日可领任务已完成(列表为空)：后续轮次跳过，不再请求
-        if (Status.hasFlagToday(FLAG_QUERY_ALL_TASK_DONE)) {
-            Log.i(BASE_TAG, "今日无可做任务列表，跳过");
-            return null;
-        }
+        // 注意：不再用“当日无任务”标记跳过 queryAllStatusTaskList。
+        // 这条列表是签到页当天动态下发的（后面还可能新增任务），一旦上午判成空就整日不查，
+        // 会造成“今天没任务”的假象；每轮多查一次的成本可以接受。
         try {
             String rawJson = AntMemberRpcCall.queryAllStatusTaskList();
             JSONObject jo = new JSONObject(rawJson);
@@ -239,13 +237,24 @@ public abstract class BaseAntMember extends ModelTask {
     private boolean processQueryAllStatusTaskList(JSONObject jo, boolean adOnly, Set<String> blacklist) {
         boolean doubleCheck = false;
         try {
-            JSONArray availableTaskList = jo.optJSONArray("availableTaskList");
-            if (availableTaskList == null || availableTaskList.length() == 0) {
-                Log.i(BASE_TAG, labelFor(adOnly) + "无可做任务列表");
-                Status.flagToday(FLAG_QUERY_ALL_TASK_DONE);
+            // 该 RPC 实际返回 {"resultCode":"SUCCESS","resultData":{...}}，任务在 resultData.taskProcessVOList。
+            // 早期实现读的是顶层 availableTaskList，永远取不到，导致签到页的浏览任务判成“无可做任务”从未执行。
+            JSONObject result = jo.optJSONObject("resultData");
+            JSONArray taskList = null;
+            if (result != null) {
+                taskList = result.optJSONArray("taskProcessVOList");
+            }
+            if (taskList == null) {
+                taskList = jo.optJSONArray("taskProcessVOList");
+            }
+            if (taskList == null) {
+                taskList = jo.optJSONArray("availableTaskList");
+            }
+            if (taskList == null || taskList.length() == 0) {
+                Log.i(BASE_TAG, labelFor(adOnly) + "当前无可做任务列表");
                 return false;
             }
-            doubleCheck = doBrowseTask(availableTaskList, adOnly, blacklist);
+            doubleCheck = doBrowseTask(taskList, adOnly, blacklist);
         } catch (Throwable t) {
             Log.err(BASE_TAG, "processQueryAllStatusTaskList err:", t);
         }
@@ -295,6 +304,21 @@ public abstract class BaseAntMember extends ModelTask {
             if (blacklist.contains(name)) {
                 return false;
             }
+            // 只处理还能做的任务：queryAllStatusTaskList 会把历史任务(EXPIRED/已完成)一起返回，
+            // 旧实现没有过滤，会拿过期任务反复报名/执行。
+            String status = task.optString("status", "");
+            if ("EXPIRED".equals(status) || "FINISHED".equals(status) || "FINISH".equals(status)
+                    || "RECEIVED".equals(status) || "RECEIVE".equals(status)
+                    || "COMPLETE".equals(status) || "COMPLETED".equals(status) || "SUCCESS".equals(status)) {
+                return false;
+            }
+            int currentCount = task.optInt("currentCount", 0);
+            int targetCount = task.optInt("targetCount", 1);
+            if (targetCount > 0 && currentCount >= targetCount) {
+                return false;
+            }
+            // PROCESSING 表示已报名(比如页面点过“去完成”)，直接执行即可，重复报名会被服务端拒
+            boolean alreadyApplied = "PROCESSING".equals(status) || currentCount > 0;
             Long id = config.has("id") ? config.optLong("id") : config.optLong("configId");
             String awardParamPoint = taskAwardPoint(config);
             JSONArray targetBusinessArr = config.optJSONArray("targetBusiness");
@@ -341,13 +365,20 @@ public abstract class BaseAntMember extends ModelTask {
                 }
                 return false;
             }
+            boolean applied = alreadyApplied;
             for (int i = left; i <= right; i++) {
-                JSONObject jo = new JSONObject(AntMemberRpcCall.applyTask(name, id));
-                TimeUtil.sleep(300);
-                if (!MessageUtil.checkResultCode(BASE_TAG, jo)) {
-                    //检查并标记黑名单任务
-                    MessageUtil.checkResultCodeAndMarkTaskBlackList("AntMemberTaskList", name, jo);
-                    continue;
+                if (!applied) {
+                    if (id == null || id <= 0) {
+                        Log.record(label + "⏭️跳过[" + name + "]#缺少任务id，无法报名");
+                        return false;
+                    }
+                    JSONObject applyJo = new JSONObject(AntMemberRpcCall.applyTask(name, id));
+                    TimeUtil.sleep(300);
+                    if (!MessageUtil.checkResultCode(BASE_TAG, applyJo)) {
+                        //检查并标记黑名单任务
+                        MessageUtil.checkResultCodeAndMarkTaskBlackList("AntMemberTaskList", name, applyJo);
+                        continue;
+                    }
                 }
                 String bizParam;
                 String bizSubType;
@@ -358,13 +389,15 @@ public abstract class BaseAntMember extends ModelTask {
                     bizParam = targetBusinessArray[1];
                     bizSubType = targetBusinessArray[0];
                 }
-                jo = new JSONObject(AntMemberRpcCall.executeTask(bizParam, bizSubType));
+                JSONObject jo = new JSONObject(AntMemberRpcCall.executeTask(bizParam, bizSubType));
                 TimeUtil.sleep(300);
                 if (!MessageUtil.checkResultCode(BASE_TAG, jo)) {
                     //检查并标记黑名单任务
                     MessageUtil.checkResultCodeAndMarkTaskBlackList("AntMemberTaskList", name, jo);
                     continue;
                 }
+                // 执行成功后服务端把任务重置为待报名，下一轮(多回合任务)需要重新报名
+                applied = false;
                 String ex = left == right && left == 1 ? "" : "(" + (i + 1) + "/" + right + ")";
                 Log.other(label + "🎖️完成[" + name + ex + "]#获得[" + awardParamPoint + "积分]");
                 doubleCheck = true;
