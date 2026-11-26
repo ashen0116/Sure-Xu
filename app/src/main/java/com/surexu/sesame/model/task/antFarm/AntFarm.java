@@ -59,6 +59,11 @@ public class AntFarm extends ModelTask {
      */
     private static final String FLAG_CHARITY_DONATION_DONE = "farm::donation";
 
+    /** 家庭任务「一起领外卖红包福利」当日已上报标记：上报成功即停，避免每轮重复请求 */
+    private static final String FLAG_FAMILY_TAKEOUT_REPORTED = "antFarm::familyTakeout::reported";
+    /** 家庭任务「每日捐蛋做好事」当日已上报标记：同上 */
+    private static final String FLAG_FAMILY_DONATE_REPORTED = "antFarm::familyDonate::reported";
+
     /** 小鸡乐园刷任务「当日未推进」计数：刷任务后回读没推进则 +1，有推进重置为 0；达到上限当日不再刷 */
     private static final String FLAG_GAME_DRAW_TASK_NO_PROGRESS = "antFarm::gameDrawTaskNoProgress";
     /** 小鸡乐园刷任务连续未推进的当日上限（按次计数，达到才当日停，不再一次误判就封死当天） */
@@ -168,6 +173,8 @@ public class AntFarm extends ModelTask {
     private BooleanModelField family;
     private SelectModelField familyOptions;
     private SelectModelField notInviteList; // 新增：不邀请列表
+    private BooleanModelField familyTakeout;                    // 亲密家庭 | 领外卖红包福利
+    private BooleanModelField familyDonate;                     // 亲密家庭 | 每日捐蛋做好事
 
     @Override
     public ModelFields getFields() {
@@ -212,6 +219,8 @@ public class AntFarm extends ModelTask {
         modelFields.addField(family = new BooleanModelField("family", "亲密家庭 | 开启",true));
         modelFields.addField(familyOptions = new SelectModelField("familyOptions", "亲密家庭 | 选项", new LinkedHashSet<>(), CustomOption::getAntFarmFamilyOptions).setDependsOn("family"));
         modelFields.addField(notInviteList = new SelectModelField("notInviteList", "亲密家庭 | 不邀请列表", new LinkedHashSet<>(), AlipayUser::getList).setDependsOn("family"));
+        modelFields.addField(familyTakeout = new BooleanModelField("familyTakeout", "亲密家庭 | 领外卖红包福利", true).setDependsOn("family"));
+        modelFields.addField(familyDonate = new BooleanModelField("familyDonate", "亲密家庭 | 每日捐蛋做好事", true).setDependsOn("family"));
         modelFields.addField(enableSleep = new BooleanModelField("enableSleep", "小鸡睡觉 | 允许睡觉",true));
         modelFields.addField(sleepTime = new StringModelField("sleepTime", "小鸡睡觉 | 时间", "2001").setDependsOn("enableSleep"));
         modelFields.addField(sleepMinutes = new IntegerModelField("sleepMinutes", "小鸡睡觉 | 时长(分钟)", 10 * 59, 1, 10 * 60).setDependsOn("enableSleep"));
@@ -4005,9 +4014,86 @@ public class AntFarm extends ModelTask {
             if (familyOptions.getValue().contains("shareToFriends")) {
                 familyShareToFriends(ownerGroupId, familyUserIds, notInviteList);
             }
+
+            // 家庭成员任务：一起领外卖红包福利 / 每日捐蛋做好事（协议上报，不打开页面）
+            if (familyTakeout.getValue() || familyDonate.getValue()) {
+                familyDailyTasks();
+            }
         } catch (Throwable t) {
             Log.err(TAG, "family err:", t);
         }
+    }
+
+    /**
+     * 家庭成员任务（{@code com.alipay.antfarm.listFamilyTask} → {@code doFarmTask} 协议上报）。
+     *
+     * <p>「一起领外卖红包福利」(FAMILY_SHANGOU) 是 taskMode=VIEW + innerAction=JUMP：客户端要点
+     * 「去完成」跳到闪购小程序、由页面带回带点击态的参数才会推进；静默模式下页面不拉起，
+     * 光用 {@code am start} 打开原始 targetUrl 也不会算完成（实测停留 45 秒仍 TODO）。
+     * <p>「每日捐蛋做好事」(DAILY_DONATE) 是 taskMode=TRIGGER + innerAction=DONATION：要靠真捐蛋触发，
+     * 而「每日捐蛋 | 方式」默认是「不捐赠」，所以这两条长期卡在 TODO。
+     * <p>实测两条都可以直接调 {@code com.alipay.antfarm.doFarmTask}
+     * （{@code taskSceneCode=ANTFARM_FAMILY_TASK}）上报完成：回包 {@code resultCode=100}、
+     * {@code taskStatus=FINISHED}，服务端随即自动结算亲密度（外卖红包 +1、每日捐蛋 +10），
+     * 既不打开页面，也不消耗爱心蛋。
+     */
+    private void familyDailyTasks() {
+        try {
+            JSONObject jo = new JSONObject(AntFarmRpcCall.listFamilyTask());
+            if (!MessageUtil.checkMemo(TAG, jo)) {
+                return;
+            }
+            JSONArray familyTasks = jo.optJSONArray("familyTasks");
+            if (familyTasks == null) {
+                return;
+            }
+            for (int i = 0; i < familyTasks.length(); i++) {
+                JSONObject task = familyTasks.getJSONObject(i);
+                String taskId = task.optString("taskId");
+                String taskStatus = task.optString("taskStatus");
+                String title = task.optString("title");
+                BooleanModelField switchField;
+                String flag;
+                if ("FAMILY_SHANGOU".equals(taskId)) {
+                    switchField = familyTakeout;
+                    flag = FLAG_FAMILY_TAKEOUT_REPORTED;
+                } else if ("DAILY_DONATE".equals(taskId)) {
+                    switchField = familyDonate;
+                    flag = FLAG_FAMILY_DONATE_REPORTED;
+                } else {
+                    continue;
+                }
+                if (!switchField.getValue() || !"TODO".equals(taskStatus)) {
+                    continue;
+                }
+                if (Status.hasFlagToday(flag)) {
+                    Log.record("家庭任务🏠[" + title + "]#今日已上报过，跳过");
+                    continue;
+                }
+                Status.flagToday(flag);
+                if (reportFamilyTask(taskId, title)) {
+                    TimeUtil.sleep(500);
+                }
+            }
+        } catch (Throwable t) {
+            Log.err(TAG, "familyDailyTasks err:", t);
+        }
+    }
+
+    /** 单条家庭成员任务的协议上报；成功返回 true */
+    private boolean reportFamilyTask(String taskId, String title) {
+        try {
+            JSONObject jo = new JSONObject(AntFarmRpcCall.familyTaskReport(taskId));
+            if (!MessageUtil.checkMemo(TAG, jo)) {
+                return false;
+            }
+            Log.farm("家庭任务🏠[" + title + "]#协议上报完成" + "#亲密度+" + jo.optInt("awardCount")
+                    + (StringUtil.isEmpty(jo.optString("taskStatus")) ? "" : "(" + jo.optString("taskStatus") + ")"));
+            return true;
+        } catch (Throwable t) {
+            Log.err(TAG, "reportFamilyTask err:", t);
+        }
+        return false;
     }
 
     /**

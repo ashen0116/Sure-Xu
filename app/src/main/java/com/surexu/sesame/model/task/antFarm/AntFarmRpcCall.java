@@ -18,6 +18,8 @@ import com.surexu.sesame.util.idMap.UserIdMap;
 
 public class AntFarmRpcCall {
     private static final String VERSION = "1.8.2302070202.46";
+    /** 家庭任务上报（doFarmTask + ANTFARM_FAMILY_TASK）这条链路当前生效的 version，与页面点击一致 */
+    private static final String FAMILY_TASK_VERSION = "20250812.01";
 
     public static String enterFarm(String userId) {
         String args = "[{\"queryLastRecordNum\":true,\"recall\":false,\"requestType\":\"NORMAL\"," + "\"sceneCode" + "\":\"ANTFARM\",\"source\":\"H5\",\"userId\":\"" + userId + "\"}]";
@@ -480,6 +482,21 @@ public class AntFarmRpcCall {
     public static String enterFamily() {
         String args = "[{\"fromAnn\":false,\"requestType\":\"NORMAL\",\"sceneCode\":\"ANTFARM\",\"source\":\"H5\"}]";
         return ApplicationHook.requestString("com.alipay.antfarm.enterFamily", args);
+    }
+
+    /** 家庭成员任务列表（任务是「去捐步 / 去完成 / 去捐蛋」这类曝光或触发型的来源） */
+    public static String listFamilyTask() {
+        String args = "[{\"requestType\":\"NORMAL\",\"sceneCode\":\"ANTFARM\",\"source\":\"H5\",\"timeZoneId\":\"Asia/Shanghai\"}]";
+        return ApplicationHook.requestString("com.alipay.antfarm.listFamilyTask", args);
+    }
+
+    /**
+     * 家庭成员任务协议上报：走后端 {@code com.alipay.antfarm.doFarmTask}，与页面点击同一条链路，
+     * {@code taskSceneCode} 固定 {@code ANTFARM_FAMILY_TASK}，version 取该链路当前生效值。
+     */
+    public static String familyTaskReport(String taskId) {
+        String args = "[{\"bizKey\":\"" + taskId + "\",\"requestType\":\"RPC\",\"sceneCode\":\"ANTFARM\",\"source\":\"H5\"," + "\"taskSceneCode\":\"ANTFARM_FAMILY_TASK\",\"version\":\"" + FAMILY_TASK_VERSION + "\"}]";
+        return ApplicationHook.requestString("com.alipay.antfarm.doFarmTask", args);
     }
 
     /**
