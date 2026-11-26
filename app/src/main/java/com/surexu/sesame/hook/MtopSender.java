@@ -57,9 +57,14 @@ public final class MtopSender {
 
     /** 宿主容器自己的 Mtop 实例(dump hook 捕获: 签名/会话/设备环境都是现成的) */
     private static volatile Object mtopInstance;
+    /** true 表示 mtopInstance 来自宿主真实 builder(而不是静态字段/兜底猜出来的空壳实例) */
+    private static volatile boolean hostInstanceCaptured;
     /** 宿主 builder 用的 ttid(调接口时能少一次环境探测) */
     private static volatile String ttid = "";
     private static volatile Object templateBuilder;
+    /** 最近捕获到的宿主 builder 池(模板 builder 用一次上下文就旧了, 多留几个轮流用) */
+    private static final java.util.List<Object> builderPool =
+            java.util.Collections.synchronizedList(new java.util.ArrayList<Object>());
     private static volatile Class<?> templateRequestClazz;
     /** 宿主真实发出去过的请求头(含 asac/wua 等安全头), 按 api 记账, SDK 不自动注入时兜底复用 */
     private static final Map<String, Map<String, String>> OBSERVED_HEADERS = new ConcurrentHashMap<>();
@@ -113,6 +118,17 @@ public final class MtopSender {
                     + " | " + headerNote + " | cfg=" + join(notes));
 
             Result result = doSend(builder, apiName, joinNotes(notes, headerNote));
+            // MtopContext 初始化失败 = 我们自己 new 出来的 builder 环境不全(常见于没抓到宿主真实实例/ttid)，
+            // 此时改用宿主现成的 builder 换请求对象重发一次
+            if (!result.ok && result.isContextFail()) {
+                Result viaTemplate = sendViaTemplate(apiName, request, headers);
+                if (viaTemplate != null) {
+                    Log.record("MTOP上下文初始化失败, 已改用宿主模板builder重发: " + viaTemplate.brief());
+                    if (viaTemplate.ok) {
+                        return viaTemplate;
+                    }
+                }
+            }
             if (result.ok || !needWua || !result.isSecurityFail()) {
                 return result;
             }
@@ -163,17 +179,31 @@ public final class MtopSender {
             if (templateBuilder == null) {
                 templateBuilder = builder;
             }
-            // 先捕获 Mtop 实例，再优先从实例读 ttid：闲鱼的 ttid 挂在 Mtop 实例上(MtopBusiness 上没有)
-            if (mtopInstance == null) {
-                captureInstance(findMtop(builder, 2, new int[]{60}));
+            // 池化: 每个 builder 的 MtopContext 用过一次就旧了, 保留最近 6 个轮流复用
+            builderPool.add(builder);
+            while (builderPool.size() > 6) {
+                builderPool.remove(0);
             }
-            if (mtopInstance == null && extraArgs != null) {
+            // 先捕获 Mtop 实例，再优先从实例读 ttid：闲鱼的 ttid 挂在 Mtop 实例上(MtopBusiness 上没有)
+            // 宿主真实 builder 上的实例最可靠：拿到就强制覆盖(之前可能已经用静态字段猜了个空壳实例导致
+            // 后续请求一律 ANDROID_SYS_MTOPCONTEXT_INIT_ERROR)
+            Object hostMtop = findMtop(builder, 2, new int[]{60});
+            if (hostMtop == null && extraArgs != null) {
                 for (Object arg : extraArgs) {
                     if (isMtop(arg)) {
-                        captureInstance(arg);
+                        hostMtop = arg;
                         break;
                     }
                 }
+            }
+            if (hostMtop != null) {
+                if (mtopInstance != hostMtop) {
+                    mtopInstance = hostMtop;
+                    hostInstanceCaptured = true;
+                    Log.debug("[" + TAG + "] 已锁定宿主真实 Mtop 实例: " + hostMtop.getClass().getName());
+                }
+            } else if (mtopInstance == null) {
+                captureInstance(findMtop(builder, 2, new int[]{60}));
             }
             if (StringUtil.isEmpty(ttid)) {
                 Object v = null;
@@ -460,12 +490,22 @@ public final class MtopSender {
                 }
             }
         }
-        // 1) mtop.build(request, ttid) 之类工厂方法
+        // 1) mtop.build(request, ttid) 之类工厂方法: 参数多的优先(带 ttid 的重载才不会丢上下文)
+        java.util.List<Method> buildMethods = new java.util.ArrayList<>();
         for (Method m : allMethods(mtop.getClass())) {
             String n = m.getName();
-            if (!"build".equals(n) && !"buildMtopBuilder".equals(n) && !"createBuilder".equals(n)) {
-                continue;
+            if ("build".equals(n) || "buildMtopBuilder".equals(n) || "createBuilder".equals(n)) {
+                buildMethods.add(m);
             }
+        }
+        java.util.Collections.sort(buildMethods, new Comparator<Method>() {
+            @Override
+            public int compare(Method a, Method b) {
+                return b.getParameterTypes().length - a.getParameterTypes().length;
+            }
+        });
+        for (Method m : buildMethods) {
+            String n = m.getName();
             Object[] args = fillArgs(m.getParameterTypes(), pool);
             if (args == null) {
                 continue;
@@ -830,8 +870,58 @@ public final class MtopSender {
 
     // ═══════════════════════════ 发送与解析 ═══════════════════════════
 
-    private static Result doSend(Object builder, String apiName, String note) {
-        Object response;
+    /**
+     * 复用宿主真实用过的 builder(只换请求对象), 其余配置/环境都是宿主现成的。
+     * 用于自建 builder 报 MTOPCONTEXT_INIT_ERROR 时兜底。
+     */
+    private static Result sendViaTemplate(String apiName, Object request, Map<String, String> headers) {
+        java.util.List<Object> candidates = new java.util.ArrayList<>();
+        Object tpl = templateBuilder;
+        if (tpl != null) {
+            candidates.add(tpl);
+        }
+        synchronized (builderPool) {
+            for (int i = builderPool.size() - 1; i >= 0; i--) {
+                Object b = builderPool.get(i);
+                if (b != null && b != tpl) {
+                    candidates.add(b);
+                }
+            }
+        }
+        for (Object tplBuilder : candidates) {
+            try {
+                boolean replaced = false;
+                for (String name : new String[]{"request", "mtopRequest"}) {
+                    if (writeValue(tplBuilder, name, request) != null) {
+                        replaced = true;
+                        break;
+                    }
+                }
+                if (!replaced) {
+                    for (String setter : new String[]{"setMtopRequest", "setRequest"}) {
+                        if (callByName(tplBuilder, setter, request)) {
+                            replaced = true;
+                            break;
+                        }
+                    }
+                }
+                if (!replaced) {
+                    continue;
+                }
+                if (headers != null && !headers.isEmpty()) {
+                    applyHeaders(tplBuilder, request, headers);
+                }
+                Result r = doSend(tplBuilder, apiName, "template");
+                if (!r.isContextFail()) {
+                    return r;
+                }
+            } catch (Throwable ignore) {
+            }
+        }
+        return null;
+    }
+
+    private static Result doSend(Object builder, String apiName, String note) {        Object response;
         try {
             response = XHelpers.callMethod(builder, "syncRequest");
         } catch (Throwable t) {
@@ -1379,6 +1469,12 @@ public final class MtopSender {
                 }
             }
             return data;
+        }
+
+        /** MtopContext 初始化失败(说明自建 builder 环境没搭全, 可改用宿主模板 builder 重发)。 */
+        public boolean isContextFail() {
+            String s = (retCode + " " + retText + " " + failReason).toUpperCase(Locale.ROOT);
+            return s.contains("MTOPCONTEXT");
         }
 
         /** 今日前进次数已达上限(要切城市记录的信号)。 */

@@ -11,8 +11,10 @@ import java.util.Objects;
 
 import com.surexu.sesame.data.TokenConfig;
 import com.surexu.sesame.hook.ApplicationHook;
+import com.surexu.sesame.hook.MtopSender;
 import com.surexu.sesame.hook.Toast;
 import com.surexu.sesame.model.task.antSports.AntSportsRpcCall;
+import com.surexu.sesame.model.task.handi.HandiRpcCall;
 import com.surexu.sesame.model.task.protectEcology.ProtectTreeRpcCall;
 import com.surexu.sesame.util.Log;
 import com.surexu.sesame.util.MessageUtil;
@@ -64,6 +66,10 @@ public class ExtensionsHandle {
             case "mockRequest":
                 mockRequest(fun, (String) data);
                 break;
+            case "handi":
+                // 集汗滴(体育服务 alisports/handi)调试入口: probe/index/ads/exposure/cart/tasks/preDone/call
+                handleHandi(fun, data);
+                break;
             case "openUrl":
                 // UI 侧「打开视频红包页」用：视频页没有公开入口，只能靠任务里的 btnLinkUrl 直达，
                 // 由支付宝进程自己 startActivity 才不会被跨包/包可见性拦住
@@ -94,8 +100,89 @@ public class ExtensionsHandle {
         }
     }
 
-    public static Object handleAlphaRequest(String type, String fun, Object data) {
+    /**
+     * 集汗滴(体育服务 alisports/handi)调试入口。
+     * fun: probe(首页→商品→曝光→复查) / index(首页) / ads(商品流第1页) / cart(现金钱包)。
+     */
+    private static void handleHandi(String fun, Object data) {
         try {
+            if (Objects.equals("probe", fun)) {
+                HandiRpcCall.probe();
+            } else if (Objects.equals("index", fun)) {
+                MtopSender.Result r = HandiRpcCall.index();
+                Log.record("集汗滴[首页] " + (r.ok ? String.valueOf(r.data) : r.brief()));
+            } else if (Objects.equals("ads", fun)) {
+                MtopSender.Result r = HandiRpcCall.getAds(1);
+                String text = r.ok ? String.valueOf(r.data) : r.brief();
+                Log.record("集汗滴[商品流] " + (text.length() > 800 ? text.substring(0, 800) + "..." : text));
+            } else if (Objects.equals("exposure", fun)) {
+                MtopSender.Result ads = HandiRpcCall.getAds(1);
+                if (!ads.ok || ads.body() == null) {
+                    Log.record("集汗滴[曝光] 拉商品失败: " + ads.brief());
+                    return;
+                }
+                String items = HandiRpcCall.buildExposureItems(ads.body(), 1);
+                MtopSender.Result r = HandiRpcCall.exposure(items);
+                Log.record("集汗滴[曝光] " + (r.ok ? "OK" : r.brief()));
+            } else if (Objects.equals("cart", fun)) {
+                MtopSender.Result r = HandiRpcCall.cart();
+                Log.record("集汗滴[钱包] " + (r.ok ? String.valueOf(r.data) : r.brief()));
+            } else if (Objects.equals("redpacket", fun)) {
+                MtopSender.Result r = HandiRpcCall.redPacket();
+                Log.record("集汗滴[红包] " + (r.ok ? String.valueOf(r.data) : r.brief()));
+            } else if (Objects.equals("tasks", fun)) {
+                MtopSender.Result r = HandiRpcCall.listTasks();
+                Log.record("集汗滴[任务列表] " + (r.ok ? clip(String.valueOf(r.data), 1500) : r.brief()));
+            } else if (Objects.equals("preDone", fun)) {
+                String taskId = data == null ? "" : String.valueOf(data).trim();
+                MtopSender.Result r = HandiRpcCall.preDone(taskId);
+                Log.record("集汗滴[任务开始 " + taskId + "] " + (r.ok ? String.valueOf(r.data) : r.brief()));
+            } else if (Objects.equals("done", fun)) {
+                String taskId = data == null ? "" : String.valueOf(data).trim();
+                MtopSender.Result r = HandiRpcCall.done(taskId);
+                Log.record("集汗滴[任务完成 " + taskId + "] " + (r.ok ? String.valueOf(r.data) : r.brief()));
+            } else if (Objects.equals("grant", fun)) {
+                String taskId = data == null ? "" : String.valueOf(data).trim();
+                MtopSender.Result r = HandiRpcCall.grant(taskId);
+                Log.record("集汗滴[领奖 " + taskId + "] " + (r.ok ? String.valueOf(r.data) : r.brief()));
+            } else if (Objects.equals("transfer", fun)) {
+                HandiRpcCall.doTransfer();
+            } else if (Objects.equals("run", fun) || Objects.equals("runTaskOnly", fun)) {
+                // 一键跑要在后台线程里等几十秒到几分钟(服务端按 browseTime 计时), 不能占住广播线程
+                final boolean withTransfer = Objects.equals("run", fun);
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        HandiRpcCall.runTasks(withTransfer);
+                    }
+                }, "handi-run").start();
+                Log.record("集汗滴🤖 一键跑已启动(后台线程, 完成后兑换=" + withTransfer + ")");
+            } else if (Objects.equals("call", fun)) {
+                // data 形如 {"api":"mtop.xxx","version":"1.0","data":"{...}"}
+                String text = data == null ? "" : String.valueOf(data);
+                JSONObject jo = new JSONObject(text);
+                String api = jo.optString("api");
+                String ver = jo.optString("version", "1.0");
+                String payload = jo.optString("data", "{}");
+                MtopSender.Result r = HandiRpcCall.callApi(api, ver, payload);
+                Log.record("集汗滴[直调 " + api + "] " + (r == null ? "参数缺失" : (r.ok ? clip(String.valueOf(r.data), 1500) : r.brief())));
+            } else {
+                Log.record("集汗滴[调试] 未知 fun=" + fun);
+            }
+        } catch (Throwable t) {
+            Log.err(TAG, "handleHandi err:", t);
+        }
+    }
+
+    /** 截断长文本, 避免一条日志刷太多。 */
+    private static String clip(String s, int max) {
+        if (s == null) {
+            return "";
+        }
+        return s.length() > max ? s.substring(0, max) + "..." : s;
+    }
+
+    public static Object handleAlphaRequest(String type, String fun, Object data) {        try {
             return Class.forName("com.surexu.sesame.model.extensions.ExtensionsHandleAlpha")
                     .getMethod("handleAlphaRequest", String.class, String.class, Object.class)
                     .invoke(null, type, fun, data);
