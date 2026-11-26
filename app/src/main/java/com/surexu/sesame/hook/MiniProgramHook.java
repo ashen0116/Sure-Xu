@@ -1,6 +1,7 @@
 package com.surexu.sesame.hook;
 
 import com.surexu.sesame.data.AppConfig;
+import com.surexu.sesame.util.BolanToken;
 import com.surexu.sesame.util.Log;
 import com.surexu.sesame.util.XHelpers;
 import com.surexu.sesame.util.compat.XC_MethodHook;
@@ -184,10 +185,18 @@ public final class MiniProgramHook {
 
     /** 记录小程序响应：与暂存请求按 URL 配对，按 时间/方法/参数/数据 单条输出，只保留游戏业务接口 */
     private static void logMiniResponse(Object[] args, Object thisObject) {
-        if (!miniDebugEnabled() || args == null || args.length < 2 || args[0] == null) {
+        if (args == null || args.length < 2 || args[0] == null) {
             return;
         }
         String url = args[0].toString();
+        // 玻弦红包的 token 旁路存盘：不受「抓包记录」开关影响，因为自动化每天都在用这枚 token
+        try {
+            BolanToken.capture(url, args[1] != null ? args[1].toString() : null);
+        } catch (Throwable ignored) {
+        }
+        if (!miniDebugEnabled()) {
+            return;
+        }
         if (!isGameApi(url)) {
             return;
         }

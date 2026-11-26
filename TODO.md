@@ -14,7 +14,12 @@
   - `每日捐蛋做好事`(DAILY_DONATE，TRIGGER/DONATION)：根因是「每日捐蛋 | 方式」默认「不捐赠」，代码两处 `donationType != ZERO` 拦截所以永不触发；doFarmTask 上报直接完成，亲密度 +10，不消耗爱心蛋
   - 新增两个开关（默认开）：`亲密家庭 | 领外卖红包福利`、`亲密家庭 | 每日捐蛋做好事`；每条每日只上报一次（`antFarm::familyTakeout::reported` / `antFarm::familyDonate::reported`）
 
-## 已完成（已随 v3.4.1 发布）
+- 2026-11-26：新增「玻弦红包」（支付宝小程序「玻弦打卡」，appId `2021005178678637`）——第三方接口 `tools.boxiantech.com`，不走 MTOP，模块自己发 HTTPS
+  - 鉴权：请求头 **小写 `token: <JWT>`** + **POST**（`Authorization` 一律回 `1003`，GET 回 `-1 服务器繁忙`）；`/alipay/auth` 入参名未解（`1001 token授权参数缺失`），改为在响应侧旁路把 token 存盘（`util/BolanToken`，`hook/MiniProgramHook.logMiniResponse` 里调用）
+  - 链路：`task/list` → `task/finish {"taskId"}`（回 `data.recordId`）→ `task/prize/receive {"recordId"}`（**按 recordId，不是 taskId**）；`FINISH` 但未领的任务由列表里的 `recordId` 补领
+  - 实测（PC 直连同 token）：`BROWSE` / `CPC_READING` / `MERCHANT_PLAN` 三类 `finish` 回 `code=0`；余额 0.06 → 0.14（7 条各 0.01 元）
+  - 做不了的类型：`SIMULATION_GUIDE`（`999000000 任务未完成`）、`MEDIA_LINK_POSTBACK` / `XIANYU_JUMP`（`99011 任务未完成`）、`MIDONG_TASK`（`愉悦赚广告id不存在`）——需要真实点击广告或按引导操作，代码里跳过并计数
+  - 首次使用需打开一次玻弦红包页面让 Hook 抓到 token；也可关掉「禁止打开页面」并打开「无token时自动打开页面」让功能自己开（默认关）
 
 - 青春特权：浏览任务进度闭环 + 签到状态适配
 - 游戏中心：任务采集路径修复 + 假玩上报 + 领奖修复
@@ -26,7 +31,7 @@
 
 - [x] 亲密家庭：7 个动作与 7 个设置项都已接上；2026-11-25 实测跑了 6 个
 - [x] 亲密家庭补齐两任务（外卖红包福利 / 每日捐蛋做好事）：改为协议上报，见上
-- [ ] 玻弦红包：从零实现，需先抓包
+- [x] 玻弦红包：2026-11-26 实现（协议 finish + prize/receive；token 靠打开页面旁路捕获），详见上
 - [x] 青春特权浏览任务真实刷新验证：2026-11-26 任务刷新日复跑，用户确认完成
 - [ ] 亲密家庭「一起运动做公益」(FAMILY_TREAD_MALL，DONATE_STEP)：目前由运动模块捐步带动完成，若某天捐步没跑则仍卡 TODO；是否也加一条协议上报兜底待定
 

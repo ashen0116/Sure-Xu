@@ -19,6 +19,7 @@ import com.surexu.sesame.model.task.antOrchard.AntOrchard;
 import com.surexu.sesame.model.task.consumeGold.ConsumeGold;
 import com.surexu.sesame.model.task.antSports.AntSports;
 import com.surexu.sesame.model.task.antStall.AntStall;
+import com.surexu.sesame.model.task.bolan.BolanRedPacket;
 import com.surexu.sesame.model.task.dailyCash.DailyCash;
 import com.surexu.sesame.model.task.dayDaySave.DayDaySave;
 import com.surexu.sesame.model.task.greenFinance.GreenFinance;
@@ -69,6 +70,7 @@ public class ModelOrder {
         clazzList.add(VideoRewards.class);
         clazzList.add(ContentSeedingSlide.class);
         clazzList.add(HundredTimesDiscountCard.class);
+        clazzList.add(BolanRedPacket.class);
         clazzList.add(YouthPrivilegeTasks.class);
         clazzList.add(DayDaySave.class);
         clazzList.add(DailyCash.class);
