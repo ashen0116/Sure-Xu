@@ -152,13 +152,11 @@ public class SesameSports extends ModelTask {
             debug("playState", describeRaw(stateResult));
             String playState = playStateOf(stateResult);
             if (StringUtil.isEmpty(playState)) {
+                // 实测 obtainPlayState 常常 SUCCESS 但返回空体(服务端把这个前置废掉了),
+                // 不能当成失败中止: 真正的状态以首页 nodeState 为准, 这里只记一笔
                 warn("playState", stateResult);
-                Log.record("体育游乐记⏸️ 活动状态读取失败: "
-                        + (stateResult == null ? "无响应" : stateResult.brief() + " | " + stateResult.note));
-                flushDebug(0, 0, -1);
-                return;
-            }
-            if (!"PLAYING".equals(playState)) {
+                Log.record("体育游乐记: 活动状态接口空返回(不阻断), 以首页 nodeState 为准");
+            } else if (!"PLAYING".equals(playState)) {
                 Log.record("体育游乐记⏸️ 活动状态=" + playState + "(非 PLAYING), 本次不前进");
                 flushDebug(0, 0, -1);
                 return;
@@ -291,6 +289,16 @@ public class SesameSports extends ModelTask {
                 if (back != null && back.ok) {
                     Log.record("体育游乐记: 已切回原当前城市记录 " + playingId);
                 }
+            }
+
+            // 5.5) 任务中心: 只做能纯协议完成的浏览/点击类, 其余类型自动跳过
+            try {
+                String taskSummary = SesameSportsRpcCall.runProtocolTasks();
+                Log.record(taskSummary);
+                debug("tasks", taskSummary);
+            } catch (Throwable t) {
+                Log.record("体育游乐记[任务中心] 执行异常: " + t.getClass().getSimpleName());
+                Log.err(TAG, "runProtocolTasks err:", t);
             }
 
             // 6) 汇总
@@ -654,27 +662,37 @@ public class SesameSports extends ModelTask {
 
     // ═══════════════════════════ 取值工具 ═══════════════════════════
 
-    /** 活动状态: 抓包 data 直接是字符串 "PLAYING"。 */
+    /** 活动状态: 抓包 data 直接是字符串 "PLAYING"; 现在服务端常返回空体, 用原始报文兜底。 */
     private static String playStateOf(MtopSender.Result result) {
         if (result == null || !result.ok) {
             return "";
         }
         JSONObject body = result.body();
-        if (body == null) {
-            return "";
+        if (body != null) {
+            Object data = body.opt("data");
+            if (data instanceof String && !StringUtil.isEmpty((String) data)) {
+                return (String) data;
+            }
+            String text = body.optString("data");
+            if (StringUtil.isEmpty(text)) {
+                text = body.optString("playState");
+            }
+            if (StringUtil.isEmpty(text)) {
+                text = body.optString("state");
+            }
+            if (!StringUtil.isEmpty(text)) {
+                return text;
+            }
         }
-        Object data = body.opt("data");
-        if (data instanceof String) {
-            return (String) data;
+        // data 是裸字符串时 body() 解析不出来, 只能看原始返回: 常见 PLAYING / END / PAUSED
+        String raw = result.retText == null ? "" : result.retText.trim();
+        if (raw.length() >= 2 && raw.startsWith("\"") && raw.endsWith("\"")) {
+            raw = raw.substring(1, raw.length() - 1).trim();
         }
-        String text = body.optString("data");
-        if (StringUtil.isEmpty(text)) {
-            text = body.optString("playState");
+        if ("PLAYING".equals(raw) || "END".equals(raw) || "PAUSED".equals(raw)) {
+            return raw;
         }
-        if (StringUtil.isEmpty(text)) {
-            text = body.optString("state");
-        }
-        return text;
+        return "";
     }
 
     /** 体力: data.userPointsInfo.points(字符串)。 */

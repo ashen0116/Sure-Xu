@@ -16,6 +16,7 @@ import com.surexu.sesame.hook.Toast;
 import com.surexu.sesame.model.task.antSports.AntSportsRpcCall;
 import com.surexu.sesame.model.task.handi.HandiRpcCall;
 import com.surexu.sesame.model.task.protectEcology.ProtectTreeRpcCall;
+import com.surexu.sesame.model.task.sesameSports.SesameSportsRpcCall;
 import com.surexu.sesame.util.Log;
 import com.surexu.sesame.util.MessageUtil;
 import com.surexu.sesame.util.Status;
@@ -69,6 +70,10 @@ public class ExtensionsHandle {
             case "handi":
                 // 集汗滴(体育服务 alisports/handi)调试入口: probe/index/ads/exposure/cart/tasks/preDone/call
                 handleHandi(fun, data);
+                break;
+            case "sports":
+                // 体育游乐记(alisports dog 活动)调试入口: tasks(任务中心转储到文件) / state(活动状态)
+                handleSports(fun, data);
                 break;
             case "openUrl":
                 // UI 侧「打开视频红包页」用：视频页没有公开入口，只能靠任务里的 btnLinkUrl 直达，
@@ -157,6 +162,22 @@ public class ExtensionsHandle {
                     }
                 }, "handi-run").start();
                 Log.record("集汗滴🤖 一键跑已启动(后台线程, 完成后兑换=" + withTransfer + ")");
+            } else if (Objects.equals("callDump", fun)) {
+                // 与 call 相同, 但把完整返回体写到 Sure-Xu/rpc_dump.json, 免得被日志截断
+                String text = data == null ? "" : String.valueOf(data);
+                JSONObject jo = new JSONObject(text);
+                String api = jo.optString("api");
+                String ver = jo.optString("version", "1.0");
+                String payload = jo.optString("data", "{}");
+                MtopSender.Result r = HandiRpcCall.callApi(api, ver, payload);
+                if (r == null || !r.ok || r.data == null) {
+                    Log.record("集汗滴[转储 " + api + "] 失败: " + (r == null ? "null" : r.brief()));
+                } else {
+                    String body = String.valueOf(r.data);
+                    boolean ok = writeText("rpc_dump.json", body);
+                    Log.record("集汗滴[转储 " + api + "] " + body.length() + " 字节 → "
+                            + (ok ? "Sure-Xu/rpc_dump.json" : "写入失败"));
+                }
             } else if (Objects.equals("call", fun)) {
                 // data 形如 {"api":"mtop.xxx","version":"1.0","data":"{...}"}
                 String text = data == null ? "" : String.valueOf(data);
@@ -171,6 +192,64 @@ public class ExtensionsHandle {
             }
         } catch (Throwable t) {
             Log.err(TAG, "handleHandi err:", t);
+        }
+    }
+
+    /**
+     * 体育游乐记(alisports dog 活动)调试入口。
+     * fun: tasks(任务中心清单转储到 Sure-Xu/sports_tasks.json) / state(活动状态原始返回)。
+     */
+    private static void handleSports(String fun, Object data) {
+        try {
+            if (Objects.equals("tasks", fun) || Objects.equals("tasksDump", fun)) {
+                String activityId = data == null ? "" : String.valueOf(data).trim();
+                MtopSender.Result r = StringUtil.isEmpty(activityId)
+                        ? SesameSportsRpcCall.taskModuleInfo()
+                        : SesameSportsRpcCall.taskModuleInfo(activityId);
+                if (r == null || !r.ok || r.body() == null) {
+                    Log.record("游乐记[任务] 读取失败: " + (r == null ? "null" : r.brief()));
+                    return;
+                }
+                String text = String.valueOf(r.data);
+                boolean written = writeText("sports_tasks.json", text);
+                Log.record("游乐记[任务] 已转储 " + text.length() + " 字节 → "
+                        + (written ? "Sure-Xu/sports_tasks.json" : "写入失败"));
+            } else if (Objects.equals("runTasks", fun)) {
+                // 任务中心一键跑(纯协议, 全程不跳页面), 要等几十秒到两分钟, 必须放后台线程
+                new Thread(new Runnable() {
+                    @Override
+                    public void run() {
+                        try {
+                            Log.record(SesameSportsRpcCall.runProtocolTasks());
+                        } catch (Throwable t) {
+                            Log.record("游乐记[任务] 执行异常: " + t.getClass().getSimpleName());
+                            Log.err(TAG, "runProtocolTasks err:", t);
+                        }
+                    }
+                }, "sports-tasks").start();
+                Log.record("游乐记[任务] 一键跑已启动(后台线程)");
+            } else if (Objects.equals("state", fun)) {
+                MtopSender.Result r = SesameSportsRpcCall.playState();
+                Log.record("游乐记[状态] " + (r == null ? "null" : (r.ok ? "OK raw=" + clip(r.retText, 200) : r.brief())));
+            } else {
+                Log.record("游乐记[调试] 未知 fun=" + fun);
+            }
+        } catch (Throwable t) {
+            Log.err(TAG, "handleSports err:", t);
+        }
+    }
+
+    /** 把文本写到 Sure-Xu 主目录, 便于 adb 直接 pull 下来分析。 */
+    private static boolean writeText(String name, String text) {
+        try {
+            java.io.File f = new java.io.File(com.surexu.sesame.util.FileUtil.MAIN_DIRECTORY_FILE, name);
+            java.io.FileWriter w = new java.io.FileWriter(f, false);
+            w.write(text);
+            w.close();
+            return true;
+        } catch (Throwable t) {
+            Log.err(TAG, "writeText err:", t);
+            return false;
         }
     }
 

@@ -47,6 +47,10 @@ public class SesameSportsRpcCall {
     public static final String API_QUERY_AWARD = "mtop.alisports.play.dog.common.queryAward";
     public static final String API_CHOOSE_AWARD = "mtop.alisports.play.dog.common.chooseAwardPlay";
     public static final String API_TASK_MODULE = "mtop.alisports.messi.taskcenter.getTaskModuleInfo";
+    /** 任务中心: 点「去完成」开始计时(实测有; 半小时后服务端按 browseTime 校验) */
+    public static final String API_TASK_PRE_DONE = "mtop.alisports.messi.taskcenter.preDone";
+    /** 任务中心: 完成上报(实测 done 才是真名, postDone/finish/complete 都不认) */
+    public static final String API_TASK_DONE = "mtop.alisports.messi.taskcenter.done";
 
     /**
      * 任务奖励(体力/卡币)领取接口。
@@ -278,6 +282,200 @@ public class SesameSportsRpcCall {
                 }
             }
         });
+    }
+
+    /** 任务中心: 点「去完成」开始计时。 */
+    public static MtopSender.Result taskPreDone(final String taskId) {
+        return withToken(new TokenCall() {
+            @Override
+            public MtopSender.Result run(String token) {
+                try {
+                    JSONObject data = new JSONObject();
+                    data.put("taskId", taskId == null ? "" : taskId);
+                    return MtopSender.send(API_TASK_PRE_DONE, VERSION, data.toString(), false, authHeaders(token));
+                } catch (Throwable t) {
+                    Log.err(TAG, "taskPreDone err:", t);
+                    return null;
+                }
+            }
+        });
+    }
+
+    /** 任务中心: 完成上报(必须停够 taskData.browseTime, 否则 BROWSE_TIME_NOT_ENOUGH)。 */
+    public static MtopSender.Result taskDone(final String taskId) {
+        return withToken(new TokenCall() {
+            @Override
+            public MtopSender.Result run(String token) {
+                try {
+                    JSONObject data = new JSONObject();
+                    data.put("taskId", taskId == null ? "" : taskId);
+                    return MtopSender.send(API_TASK_DONE, VERSION, data.toString(), false, authHeaders(token));
+                } catch (Throwable t) {
+                    Log.err(TAG, "taskDone err:", t);
+                    return null;
+                }
+            }
+        });
+    }
+
+    /** 任务中心领奖(不带 wua, 实测可行, 与 claimTaskReward 的差别只是签名要求)。 */
+    public static MtopSender.Result grantTask(final String taskId) {
+        return withToken(new TokenCall() {
+            @Override
+            public MtopSender.Result run(String token) {
+                try {
+                    JSONObject data = new JSONObject();
+                    data.put("taskId", taskId == null ? "" : taskId);
+                    return MtopSender.send(API_CLAIM_TASK, VERSION, data.toString(), false, authHeaders(token));
+                } catch (Throwable t) {
+                    Log.err(TAG, "grantTask err:", t);
+                    return null;
+                }
+            }
+        });
+    }
+
+    /**
+     * 任务中心「一键跑」: 只处理已实测能纯协议完成的两类任务
+     * BROWSE_PAGE(浏览页面) 与 LINK_CLICK(链接点击), 其余类型全部跳过:
+     * <ul>
+     *   <li>BROWSE_EXTERNAL_PAGE(18 条): 完成由目标页后台回调, 客户端 done 被拒;</li>
+     *   <li>MINI_APP_INDEX_VISIT(从支付宝首页回来): miniAppIndexVisit 空上报无效;</li>
+     *   <li>GOODS_AD_ITEM_ORDER_TASK(下单)、CLAM_PLAY / MINING_PLAY(要真玩小游戏)。</li>
+     * </ul>
+     * 流程: preDone → 停留 max(browseTime,5)+8 秒 → done → grant, 每步最多重试 4 次。
+     *
+     * @return 供日志输出的一行汇总
+     */
+    public static String runProtocolTasks() {
+        StringBuilder sb = new StringBuilder("体育游乐记[任务中心]");
+        int doneCount = 0;
+        int points = 0;
+        int failCount = 0;
+        JSONArray tasks = listTasksRetry();
+        if (tasks == null) {
+            return "体育游乐记[任务中心] 读取失败";
+        }
+        for (int i = 0; i < tasks.length(); i++) {
+            JSONObject task = tasks.optJSONObject(i);
+            if (task == null) {
+                continue;
+            }
+            String type = task.optString("taskType");
+            if (!"BROWSE_PAGE".equals(type) && !"LINK_CLICK".equals(type)) {
+                continue;
+            }
+            String taskId = task.optString("taskId");
+            String title = task.optString("taskMainHead", "");
+            int goal = Math.max(task.optInt("goalFinishCount", 1), 1);
+            if (task.optInt("finishCount", 0) >= goal) {
+                continue;
+            }
+            JSONObject td = task.optJSONObject("taskData");
+            int browseTime = td == null ? 0 : td.optInt("browseTime", 0);
+            int waitSec = Math.max(browseTime, 5) + 8;
+
+            MtopSender.Result pre = callRetry(0, taskId);
+            if (pre == null || !pre.ok) {
+                failCount++;
+                sb.append("\n  ").append(title).append(" 开始失败: ").append(brief(pre));
+                continue;
+            }
+            sleepSec(waitSec);
+            MtopSender.Result done = callRetry(1, taskId);
+            if (done == null || !done.ok) {
+                failCount++;
+                sb.append("\n  ").append(title).append(" 完成失败: ").append(brief(done));
+                continue;
+            }
+            sleepSec(2);
+            MtopSender.Result grant = callRetry(2, taskId);
+            int got = claimedPoints(grant);
+            if (got > 0) {
+                points += got;
+            }
+            doneCount++;
+            sb.append("\n  ").append(title).append(" 完成+领奖 ")
+                    .append(got > 0 ? got + "体力" : brief(grant));
+            sleepSec(3);
+        }
+        sb.append("\n  合计: 完成 ").append(doneCount).append(" 条, 领 ").append(points)
+                .append(" 体力, 失败 ").append(failCount).append(" 条");
+        return sb.toString();
+    }
+
+    /** 读任务清单, 失败重试 3 次(首次常见 MTOPCONTEXT 抖动), 返回扁平的任务数组。 */
+    private static JSONArray listTasksRetry() {
+        for (int i = 0; i < 3; i++) {
+            MtopSender.Result r = taskModuleInfo();
+            if (r != null && r.ok && r.body() != null) {
+                JSONArray out = new JSONArray();
+                JSONArray groups = r.body().optJSONArray("groups");
+                if (groups != null) {
+                    for (int g = 0; g < groups.length(); g++) {
+                        JSONObject group = groups.optJSONObject(g);
+                        JSONArray list = group == null ? null : group.optJSONArray("tasks");
+                        if (list == null) {
+                            continue;
+                        }
+                        for (int k = 0; k < list.length(); k++) {
+                            JSONObject t = list.optJSONObject(k);
+                            if (t != null) {
+                                out.put(t);
+                            }
+                        }
+                    }
+                }
+                return out;
+            }
+            sleepSec(3);
+        }
+        return null;
+    }
+
+    /**
+     * step: 0=preDone 1=done 2=grant。
+     * 最多 6 次、间隔 2 秒; 失败后先发一次最轻的 pageroute 把宿主 mtop 通道叫醒再重试;
+     * 连续 2 次都是「通道没准备好」(MTOPCONTEXT) 就停 8 秒缓一缓, 避免一直撞。
+     */
+    private static MtopSender.Result callRetry(int step, String taskId) {
+        MtopSender.Result r = null;
+        int contextFails = 0;
+        for (int i = 0; i < 6; i++) {
+            if (step == 0) {
+                r = taskPreDone(taskId);
+            } else if (step == 1) {
+                r = taskDone(taskId);
+            } else {
+                r = grantTask(taskId);
+            }
+            if (r != null && r.ok) {
+                return r;
+            }
+            if (r != null && r.isContextFail()) {
+                contextFails++;
+                if (contextFails >= 2) {
+                    sleepSec(8);
+                    contextFails = 0;
+                }
+            } else {
+                contextFails = 0;
+            }
+            pageroute();
+            sleepSec(2);
+        }
+        return r;
+    }
+
+    private static void sleepSec(int sec) {
+        try {
+            Thread.sleep(Math.max(sec, 0) * 1000L);
+        } catch (InterruptedException ignore) {
+        }
+    }
+
+    private static String brief(MtopSender.Result r) {
+        return r == null ? "无响应" : r.brief();
     }
 
     /** 领奖返回里实际到手的体力(grantResult.pointNum), 解析不到返回 -1。 */
